@@ -152,13 +152,15 @@ test.describe('QuickTone Web Controller — Testes E2E Full-Stack (Playwright)',
       'confirmed',
     );
 
-    // Cliente A aumenta o volume clicando no botão tátil +5
+    // Cliente A aumenta o volume clicando no botão tátil +5 (Master Volume)
     await pageA.getByTestId('volume-increase-btn').click();
     await expect(pageA.getByTestId('volume-value')).toHaveText('55%');
     await expect(pageB.getByTestId('volume-value')).toHaveText('55%');
 
-    // Troca rápida de alvo de volume para Patch Level (CC 74) e alterna Modo palco <-> Matriz
-    await pageA.getByTestId('volume-target-quick-patch_cc74').click();
+    // Alterna filtros Usuário / Fábrica e Modo palco <-> Matriz
+    await pageA.getByTestId('filter-tab-factory').click();
+    await expect(pageA.getByTestId('preset-card-F1A')).toBeVisible();
+    await pageA.getByTestId('filter-tab-user').click();
     await pageA.getByTestId('view-mode-stage-btn').click();
     await expect(pageA.getByTestId('stage-footswitch-deck')).toBeVisible();
     await pageA.getByTestId('view-mode-matrix-btn').click();

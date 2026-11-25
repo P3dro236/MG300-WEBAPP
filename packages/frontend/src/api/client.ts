@@ -1,21 +1,30 @@
-import type {
-  AppErrorRecord,
-  ConfigurePresetsDirRequest,
-  ConnectMidiRequest,
-  ControllerState,
-  Preset,
-  PresetsDirectoryStatus,
-  PresetsResponse,
-  SelectPresetRequest,
-  SentCommandRecord,
-  UpdateVolumeRequest,
-  WsClientMessage,
-  WsServerMessage,
+import {
+  type AppErrorRecord,
+  type ConnectMidiRequest,
+  type ControllerState,
+  type ExperimentalEditState,
+  type ExperimentalSaveResult,
+  MG300_EXPERIMENTAL_SLOT,
+  type PairingChallengeInfo,
+  type PairingDecisionPayload,
+  type PairingPollPayload,
+  type PairingRequestPayload,
+  type PairingSessionInfo,
+  type PairingStatusResponse,
+  type PendingPairingRequest,
+  type Preset,
+  type PresetsDirectoryStatus,
+  type PresetsResponse,
+  type RemoveTrustedDevicePayload,
+  type SelectPresetRequest,
+  type SentCommandRecord,
+  type TrustedDeviceInfo,
+  type UpdateVolumeRequest,
+  type WsClientMessage,
+  type WsServerMessage,
 } from '@quicktone/shared';
 
 export type WsConnectionStatus = 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
-
-const TOKEN_STORAGE_KEY = 'quicktone_lan_token';
 
 export class QuickToneApiError extends Error {
   public readonly status: number;
@@ -49,7 +58,7 @@ export class QuickToneApiError extends Error {
 
 export function createInitialControllerState(): ControllerState {
   return {
-    connectionState: 'disconnected',
+    connectionState: 'connecting',
     connectedPortName: null,
     availablePorts: [],
     syncStatus: 'unknown',
@@ -63,7 +72,7 @@ export function createInitialControllerState(): ControllerState {
     lastSentCommand: null,
     volumeTarget: 'master_cc64',
     presetsDirectory: null,
-    presetsDirectoryStatus: 'unconfigured',
+    presetsDirectoryStatus: 'ok',
     includeFactoryPresets: true,
     presetCount: 0,
     warnings: [],
@@ -130,28 +139,9 @@ export function extractPresetsResponse(payload: unknown): PresetsResponse | null
   return null;
 }
 
-export function getStoredLanToken(): string {
-  try {
-    return globalThis.localStorage?.getItem(TOKEN_STORAGE_KEY) ?? '';
-  } catch {
-    return '';
-  }
-}
-
-export function setStoredLanToken(token: string): void {
-  try {
-    if (token.trim()) {
-      globalThis.localStorage?.setItem(TOKEN_STORAGE_KEY, token.trim());
-    } else {
-      globalThis.localStorage?.removeItem(TOKEN_STORAGE_KEY);
-    }
-  } catch {
-    // Ignore storage quota / private mode failures
-  }
-}
-
 export interface ApiClientOptions {
   baseUrl?: string;
+  /** Optional in-memory token for programmatic callers/tests; never persisted to localStorage. */
   token?: string;
 }
 
@@ -161,12 +151,11 @@ export class QuickToneApiClient {
 
   constructor(options: ApiClientOptions = {}) {
     this.baseUrl = (options.baseUrl ?? '').replace(/\/$/, '');
-    this.token = options.token ?? getStoredLanToken();
+    this.token = options.token?.trim() ?? '';
   }
 
   public setToken(token: string): void {
     this.token = token.trim();
-    setStoredLanToken(this.token);
   }
 
   public getToken(): string {
@@ -195,21 +184,26 @@ export class QuickToneApiClient {
 
     const response = await globalThis.fetch(`${this.baseUrl}${path}`, {
       ...init,
+      credentials: 'same-origin',
       headers,
     });
 
     let body: unknown = null;
+    let isJsonObject = false;
     const text = await response.text();
     if (text) {
       try {
-        body = JSON.parse(text) as unknown;
+        const parsed = JSON.parse(text) as unknown;
+        body = parsed;
+        isJsonObject = parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed);
       } catch {
-        body = { message: text };
+        // Non-JSON responses (e.g., proxy HTML 502/504) must never leak raw text to UI error banners.
+        body = null;
       }
     }
 
     if (!response.ok) {
-      const record = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
+      const record = (isJsonObject ? body : {}) as Record<string, unknown>;
       const nestedError =
         record.error && typeof record.error === 'object'
           ? (record.error as Record<string, unknown>)
@@ -235,7 +229,7 @@ export class QuickToneApiClient {
         code,
         message,
         timestamp,
-        state: extractControllerState(body),
+        state: isJsonObject ? extractControllerState(body) : null,
       });
     }
 
@@ -279,22 +273,15 @@ export class QuickToneApiClient {
   }> {
     const payload = await this.request<unknown>('/api/volume', {
       method: 'PUT',
-      body: JSON.stringify(request),
+      body: JSON.stringify({
+        volume: request.volume,
+        target: 'master_cc64',
+      }),
     });
     return {
       state: extractControllerState(payload),
       command: extractSentCommand(payload),
     };
-  }
-
-  public async setVolumeTarget(
-    target: NonNullable<UpdateVolumeRequest['target']>,
-  ): Promise<ControllerState | null> {
-    const payload = await this.request<unknown>('/api/volume/target', {
-      method: 'POST',
-      body: JSON.stringify({ target }),
-    });
-    return extractControllerState(payload);
   }
 
   public async connectMidi(request: ConnectMidiRequest = {}): Promise<ControllerState | null> {
@@ -313,20 +300,6 @@ export class QuickToneApiClient {
     return extractControllerState(payload);
   }
 
-  public async configurePresetsDirectory(request: ConfigurePresetsDirRequest): Promise<{
-    state: ControllerState | null;
-    presetsResponse: PresetsResponse | null;
-  }> {
-    const payload = await this.request<unknown>('/api/presets/config', {
-      method: 'POST',
-      body: JSON.stringify(request),
-    });
-    return {
-      state: extractControllerState(payload),
-      presetsResponse: extractPresetsResponse(payload),
-    };
-  }
-
   public async reloadPresets(): Promise<{
     state: ControllerState | null;
     presetsResponse: PresetsResponse | null;
@@ -340,27 +313,274 @@ export class QuickToneApiClient {
       presetsResponse: extractPresetsResponse(payload),
     };
   }
+
+  // Pairing & Mobile Session API
+
+  public async getPairingStatus(): Promise<PairingStatusResponse> {
+    return this.request<PairingStatusResponse>('/api/pairing/status', {
+      method: 'GET',
+    });
+  }
+
+  public async createPairingChallenge(): Promise<{
+    challenge: PairingChallengeInfo;
+    activeSession: PairingSessionInfo | null;
+    pendingRequests: PendingPairingRequest[];
+    activeChallenge: PairingChallengeInfo | null;
+    trustedDevices?: TrustedDeviceInfo[];
+  }> {
+    return this.request('/api/pairing/challenge', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+  }
+
+  public async requestPairing(payload: PairingRequestPayload): Promise<{
+    requestId: string;
+    claimSecret: string;
+    verificationCode: string;
+    expiresAt: string;
+  }> {
+    return this.request('/api/pairing/request', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  public async pollPairing(payload: PairingPollPayload): Promise<
+    | { status: 'pending'; verificationCode: string; expiresAt: string }
+    | { status: 'rejected' }
+    | { status: 'expired' }
+    | { status: 'approved'; session: PairingSessionInfo }
+    | { status: 'claimed'; session: PairingSessionInfo | null }
+  > {
+    return this.request('/api/pairing/poll', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  public async approvePairing(payload: PairingDecisionPayload): Promise<{
+    activeSession: PairingSessionInfo;
+    pendingRequests: PendingPairingRequest[];
+    activeChallenge: PairingChallengeInfo | null;
+    trustedDevices?: TrustedDeviceInfo[];
+  }> {
+    return this.request('/api/pairing/approve', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  public async rejectPairing(payload: PairingDecisionPayload): Promise<{
+    ok: boolean;
+    activeSession: PairingSessionInfo | null;
+    pendingRequests: PendingPairingRequest[];
+    activeChallenge: PairingChallengeInfo | null;
+    trustedDevices?: TrustedDeviceInfo[];
+  }> {
+    return this.request('/api/pairing/reject', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  public async revokePairingSession(): Promise<{
+    ok: boolean;
+    activeSession: PairingSessionInfo | null;
+    pendingRequests: PendingPairingRequest[];
+    activeChallenge: PairingChallengeInfo | null;
+    trustedDevices?: TrustedDeviceInfo[];
+  }> {
+    return this.request('/api/pairing/revoke', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+  }
+
+  public async logoutPairingSession(): Promise<{ ok: boolean }> {
+    return this.request('/api/pairing/logout', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+  }
+
+  public async loginTrustedDevice(): Promise<{
+    ok: boolean;
+    session: PairingSessionInfo;
+  }> {
+    return this.request('/api/pairing/trusted-login', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+  }
+
+  public async removeTrustedDevice(payload: RemoveTrustedDevicePayload): Promise<{
+    ok: boolean;
+    activeSession: PairingSessionInfo | null;
+    pendingRequests: PendingPairingRequest[];
+    activeChallenge: PairingChallengeInfo | null;
+    trustedDevices: TrustedDeviceInfo[];
+  }> {
+    return this.request('/api/pairing/trusted/remove', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  // Experimental edit API
+
+  /** Returns null when the backend does not expose the experimental routes (404). */
+  public async getExperimentalState(): Promise<ExperimentalEditState | null> {
+    try {
+      const data = await this.request<ExperimentalEditState | null>('/api/experimental/state', {
+        method: 'GET',
+      });
+      if (
+        !data ||
+        typeof data !== 'object' ||
+        typeof data.loaded !== 'boolean' ||
+        !Array.isArray(data.blocksEnabled)
+      ) {
+        return null;
+      }
+      return data;
+    } catch (err) {
+      if (err instanceof QuickToneApiError && err.status === 404) {
+        return null;
+      }
+      throw err;
+    }
+  }
+
+  public loadExperimentalSlot(slot?: number): Promise<ExperimentalEditState> {
+    return this.request('/api/experimental/load', {
+      method: 'POST',
+      body: JSON.stringify(slot !== undefined ? { slot } : {}),
+    });
+  }
+
+  public createNewExperimentalPreset(payload?: {
+    presetName?: string;
+    bpm?: number;
+    timeFlag?: number;
+    targetSlot?: number;
+  }): Promise<ExperimentalEditState> {
+    return this.request('/api/experimental/new', {
+      method: 'POST',
+      body: JSON.stringify(payload ?? {}),
+    });
+  }
+
+  public importNuxPresetFile(payload: {
+    fileName: string;
+    contentBase64: string;
+    bundleSlotIndex?: number;
+  }): Promise<ExperimentalImportResponse> {
+    return this.request('/api/experimental/import', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  public setExperimentalMeta(payload: {
+    presetName?: string;
+    bpm?: number;
+    timeFlag?: number;
+  }): Promise<ExperimentalEditState> {
+    return this.request('/api/experimental/meta', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  public setExperimentalAmpParam(index: number, value: number): Promise<ExperimentalEditState> {
+    return this.request('/api/experimental/param', {
+      method: 'PUT',
+      body: JSON.stringify({ index, value }),
+    });
+  }
+
+  public setExperimentalBlock(block: number, on: boolean): Promise<ExperimentalEditState> {
+    return this.request('/api/experimental/block', {
+      method: 'PUT',
+      body: JSON.stringify({ block, on }),
+    });
+  }
+
+  public setExperimentalBlockModel(
+    block: number,
+    modelId: number,
+  ): Promise<ExperimentalEditState> {
+    return this.request('/api/experimental/block-model', {
+      method: 'PUT',
+      body: JSON.stringify({ block, modelId }),
+    });
+  }
+
+  public setExperimentalBlockParam(
+    block: number,
+    index: number,
+    value: number,
+  ): Promise<ExperimentalEditState> {
+    return this.request('/api/experimental/block-param', {
+      method: 'PUT',
+      body: JSON.stringify({ block, index, value }),
+    });
+  }
+
+  public setExperimentalLevel(
+    target: 'patchVolume' | 'irVolume' | 'irCut' | 'cab' | 'mic',
+    value: number,
+  ): Promise<ExperimentalEditState> {
+    return this.request('/api/experimental/level', {
+      method: 'PUT',
+      body: JSON.stringify({ target, value }),
+    });
+  }
+
+  public saveExperimentalSlot(
+    confirmSlot: number = MG300_EXPERIMENTAL_SLOT,
+  ): Promise<ExperimentalSaveResult> {
+    return this.request('/api/experimental/save', {
+      method: 'POST',
+      body: JSON.stringify({ confirmSlot }),
+    });
+  }
+}
+
+export type { ExperimentalEditState, ExperimentalSaveResult };
+
+export interface ExperimentalImportBundleSlot {
+  index: number;
+  slotIndex: number;
+  displayBank: string;
+  name: string;
+  usesUserIr: boolean;
+}
+
+export interface ExperimentalImportResponse {
+  state: ExperimentalEditState;
+  importedCount: number;
+  selectedIndex: number;
+  bundleSlots?: ExperimentalImportBundleSlot[];
 }
 
 export interface WsManagerOptions {
   wsUrl?: string;
-  token?: string;
   reconnectBaseDelayMs?: number;
   reconnectMaxDelayMs?: number;
   onStatusChange: (status: WsConnectionStatus) => void;
   onMessage: (message: WsServerMessage) => void;
   onReconnected?: () => void;
+  onAuthRevoked?: (reason: 'revoked' | 'expired') => void;
 }
 
-export function resolveDefaultWsUrl(token?: string): string {
+export function resolveDefaultWsUrl(): string {
   const loc = globalThis.window?.location;
   const protocol = loc?.protocol === 'https:' ? 'wss:' : 'ws:';
   const host = loc?.host || 'localhost:3001';
-  const base = `${protocol}//${host}/ws`;
-  if (token && token.trim()) {
-    return `${base}?token=${encodeURIComponent(token.trim())}`;
-  }
-  return base;
+  return `${protocol}//${host}/ws`;
 }
 
 export class QuickToneWsManager {
@@ -370,19 +590,19 @@ export class QuickToneWsManager {
   private reconnectAttempts = 0;
   private disposed = false;
   private hadConnectedOnce = false;
-  private token: string;
 
   constructor(options: WsManagerOptions) {
     this.options = options;
-    this.token = options.token ?? getStoredLanToken();
-  }
-
-  public setToken(token: string): void {
-    this.token = token.trim();
   }
 
   public connect(): void {
     if (this.disposed) {
+      return;
+    }
+    if (
+      this.socket &&
+      (this.socket.readyState === 0 || this.socket.readyState === 1)
+    ) {
       return;
     }
     this.clearReconnectTimer();
@@ -433,11 +653,18 @@ export class QuickToneWsManager {
         // Browser fires onclose right after onerror; ensure reconnect is scheduled if socket already closed
       };
 
-      ws.onclose = () => {
+      ws.onclose = (event?: CloseEvent) => {
         if (this.disposed || this.socket !== ws) {
           return;
         }
         this.socket = null;
+        if (event && (event.code === 4001 || event.code === 4002)) {
+          this.disposed = true;
+          this.clearReconnectTimer();
+          this.options.onStatusChange('disconnected');
+          this.options.onAuthRevoked?.(event.code === 4002 ? 'expired' : 'revoked');
+          return;
+        }
         this.scheduleReconnect();
       };
     } catch {
@@ -456,7 +683,7 @@ export class QuickToneWsManager {
     }
   }
 
-  public disconnect(): void {
+  public disconnect(silent = false): void {
     this.disposed = true;
     this.clearReconnectTimer();
     if (this.socket) {
@@ -472,18 +699,16 @@ export class QuickToneWsManager {
         // Ignore close errors
       }
     }
-    this.options.onStatusChange('disconnected');
+    if (!silent) {
+      this.options.onStatusChange('disconnected');
+    }
   }
 
   private buildWsUrl(): string {
     if (this.options.wsUrl) {
-      if (this.token && !this.options.wsUrl.includes('token=')) {
-        const sep = this.options.wsUrl.includes('?') ? '&' : '?';
-        return `${this.options.wsUrl}${sep}token=${encodeURIComponent(this.token)}`;
-      }
       return this.options.wsUrl;
     }
-    return resolveDefaultWsUrl(this.token);
+    return resolveDefaultWsUrl();
   }
 
   private scheduleReconnect(): void {

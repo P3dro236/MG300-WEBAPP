@@ -103,12 +103,15 @@ describe('QuickTone Stage Hardware UI Components (unslop)', () => {
     expect(strip.querySelector('[data-block="DLY"]')?.getAttribute('data-active')).toBe('true');
   });
 
-  it('supports switching between Stage Footswitch Deck (A-D) and Bank Matrix (1-9)', () => {
+  it('supports switching between Stage Footswitch Deck (A-D) and Bank Matrix (1-9) and Version 5 QR codes', () => {
+    const pairingMatrix = generateQrMatrix('http://192.168.100.254:5173/?pair=AbCdEfGhIjKlMnOpQrSt');
+    expect(pairingMatrix).not.toBeNull();
+
     const onChangeViewMode = vi.fn();
     const { rerender } = render(
       <PresetGrid
         presets={SAMPLE_PRESETS}
-        filter="all"
+        filter="user"
         viewMode="stage"
         onChangeFilter={vi.fn()}
         onChangeViewMode={onChangeViewMode}
@@ -121,10 +124,7 @@ describe('QuickTone Stage Hardware UI Components (unslop)', () => {
         }}
         lastSentCommand={null}
         disabled={false}
-        directoryStatus="ok"
-        presetsDirectory={null}
         onSelectPreset={vi.fn()}
-        onOpenSettings={vi.fn()}
       />,
     );
 
@@ -140,7 +140,7 @@ describe('QuickTone Stage Hardware UI Components (unslop)', () => {
     rerender(
       <PresetGrid
         presets={SAMPLE_PRESETS}
-        filter="all"
+        filter="user"
         viewMode="matrix"
         onChangeFilter={vi.fn()}
         onChangeViewMode={onChangeViewMode}
@@ -153,10 +153,7 @@ describe('QuickTone Stage Hardware UI Components (unslop)', () => {
         }}
         lastSentCommand={null}
         disabled={false}
-        directoryStatus="ok"
-        presetsDirectory={null}
         onSelectPreset={vi.fn()}
-        onOpenSettings={vi.fn()}
       />,
     );
     expect(screen.queryByTestId('stage-footswitch-deck')).not.toBeInTheDocument();
@@ -244,7 +241,7 @@ describe('QuickTone Stage Hardware UI Components (unslop)', () => {
       });
     });
 
-    it('triggers POST /api/presets/reload from Sincronizar button and toggles factory presets in SettingsModal', async () => {
+    it('triggers POST /api/presets/reload from Sincronizar button and opens QR pairing in SettingsModal without folder or fader controls', async () => {
       const fetchCalls: Array<{ url: string; body: unknown }> = [];
       const baseState: ControllerState = {
         connectionState: 'connected',
@@ -276,6 +273,41 @@ describe('QuickTone Stage Hardware UI Components (unslop)', () => {
           const body = typeof init?.body === 'string' ? JSON.parse(init.body) : null;
           fetchCalls.push({ url, body });
 
+          if (url.endsWith('/api/pairing/status')) {
+            return new Response(
+              JSON.stringify({
+                isLocalDesktop: true,
+                authenticated: true,
+                sessionStatus: 'desktop',
+                activeSession: null,
+                pendingRequests: [],
+                activeChallenge: null,
+                lanUrls: ['http://192.168.1.50:3001'],
+              }),
+              { status: 200 },
+            );
+          }
+          if (url.endsWith('/api/pairing/challenge')) {
+            return new Response(
+              JSON.stringify({
+                challenge: {
+                  challengeId: 'ch-1',
+                  pairingCode: 'AbCdEfGh1234',
+                  pairingUrl: 'http://192.168.1.50:3001/?pair=AbCdEfGh1234',
+                  expiresAt: new Date(Date.now() + 120_000).toISOString(),
+                },
+                activeSession: null,
+                pendingRequests: [],
+                activeChallenge: {
+                  challengeId: 'ch-1',
+                  pairingCode: 'AbCdEfGh1234',
+                  pairingUrl: 'http://192.168.1.50:3001/?pair=AbCdEfGh1234',
+                  expiresAt: new Date(Date.now() + 120_000).toISOString(),
+                },
+              }),
+              { status: 200 },
+            );
+          }
           if (url.endsWith('/api/status')) {
             return new Response(JSON.stringify(baseState), { status: 200 });
           }
@@ -302,18 +334,6 @@ describe('QuickTone Stage Hardware UI Components (unslop)', () => {
               { status: 200 },
             );
           }
-          if (url.endsWith('/api/presets/config')) {
-            return new Response(
-              JSON.stringify({
-                presets: SAMPLE_PRESETS,
-                directory: null,
-                directoryStatus: 'ok',
-                warnings: [],
-                state: { ...baseState, includeFactoryPresets: false },
-              }),
-              { status: 200 },
-            );
-          }
           return new Response(JSON.stringify({}), { status: 404 });
         }),
       );
@@ -329,18 +349,16 @@ describe('QuickTone Stage Hardware UI Components (unslop)', () => {
       });
 
       fireEvent.click(screen.getByTestId('open-settings-btn'));
-      const toggle = await screen.findByTestId('include-factory-presets-toggle');
-      expect(toggle).toBeChecked();
-      fireEvent.click(toggle);
+      expect(screen.queryByTestId('presets-dir-input')).not.toBeInTheDocument();
+      expect(
+        screen.queryByTestId('volume-target-option-patch_cc74'),
+      ).not.toBeInTheDocument();
+
+      const genQrBtn = await screen.findByTestId('generate-pairing-qr-btn');
+      fireEvent.click(genQrBtn);
 
       await waitFor(() => {
-        expect(
-          fetchCalls.some(
-            (c) =>
-              c.url.endsWith('/api/presets/config') &&
-              (c.body as { includeFactoryPresets?: boolean })?.includeFactoryPresets === false,
-          ),
-        ).toBe(true);
+        expect(screen.getByTestId('lan-qr-svg')).toBeInTheDocument();
       });
     });
   });

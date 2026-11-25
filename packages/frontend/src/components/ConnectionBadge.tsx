@@ -14,7 +14,7 @@ interface ConnectionBadgeProps {
   syncStatus: DeviceSyncStatus;
   confirmedState: ConfirmedDeviceState;
   lastSentCommand: SentCommandRecord | null;
-  deviceFirmwareVersion?: string | null;
+  hasLoadedInitialState?: boolean;
 }
 
 const MIDI_STATE_MAP: Record<
@@ -27,12 +27,12 @@ const MIDI_STATE_MAP: Record<
     textClass: 'text-[#F3F4F6]',
   },
   connecting: {
-    label: 'Conectando...',
+    label: 'Conectando MIDI...',
     dotClass: 'bg-[#F59E0B]',
     textClass: 'text-[#F59E0B]',
   },
   reconnecting: {
-    label: 'Reconectando...',
+    label: 'Reconectando MIDI...',
     dotClass: 'bg-[#F59E0B]',
     textClass: 'text-[#F59E0B]',
   },
@@ -50,7 +50,7 @@ const MIDI_STATE_MAP: Record<
 
 const WS_STATE_MAP: Record<WsConnectionStatus, { label: string; dotClass: string }> = {
   connected: { label: 'WS Online', dotClass: 'bg-[#22C55E]' },
-  connecting: { label: 'WS...', dotClass: 'bg-[#F59E0B]' },
+  connecting: { label: 'WS Conectando...', dotClass: 'bg-[#F59E0B]' },
   reconnecting: { label: 'Reconectando WS...', dotClass: 'bg-[#F59E0B]' },
   disconnected: { label: 'WS Off', dotClass: 'bg-[#EF4444]' },
 };
@@ -62,9 +62,12 @@ export const ConnectionBadge: React.FC<ConnectionBadgeProps> = ({
   syncStatus,
   confirmedState,
   lastSentCommand,
-  deviceFirmwareVersion,
+  hasLoadedInitialState = true,
 }) => {
-  const midiStyle = MIDI_STATE_MAP[connectionState];
+  const effectiveMidiState: MidiConnectionState = !hasLoadedInitialState
+    ? 'connecting'
+    : connectionState;
+  const midiStyle = MIDI_STATE_MAP[effectiveMidiState];
   const wsStyle = WS_STATE_MAP[wsStatus];
 
   let syncText = 'Estado da pedaleira desconhecido';
@@ -85,17 +88,20 @@ export const ConnectionBadge: React.FC<ConnectionBadgeProps> = ({
     <div className="flex flex-wrap items-center gap-1.5 font-mono text-[11px] tabular-nums">
       <div
         data-testid="midi-connection-badge"
-        data-connection-state={connectionState}
+        data-connection-state={effectiveMidiState}
         className="inline-flex items-center gap-1.5 rounded border border-white/[0.08] bg-[#090A0C] px-2.5 py-1"
       >
         <span className={`h-2 w-2 rounded-full ${midiStyle.dotClass}`} />
         <span className={midiStyle.textClass}>
-          {midiStyle.label}
-          {connectionState === 'connected' && connectedPortName ? ` · ${connectedPortName}` : ''}
+          {!hasLoadedInitialState
+            ? 'Verificando MIDI...'
+            : wsStatus !== 'connected' && effectiveMidiState === 'disconnected'
+              ? 'MIDI (sem servidor)'
+              : midiStyle.label}
+          {effectiveMidiState === 'connected' && connectedPortName
+            ? ` · ${connectedPortName}`
+            : ''}
         </span>
-        {connectionState === 'connected' && deviceFirmwareVersion ? (
-          <span className="hidden text-[#8E95A2] xl:inline">({deviceFirmwareVersion})</span>
-        ) : null}
       </div>
 
       <div

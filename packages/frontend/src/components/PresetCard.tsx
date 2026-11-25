@@ -102,17 +102,7 @@ export const PresetCard: React.FC<PresetCardProps> = ({
             >
               COMANDO ENVIADO
             </span>
-          ) : (
-            <span className="font-mono text-[10px] text-[#525866] tabular-nums">
-              {preset.origin === 'hardware'
-                ? 'HW'
-                : preset.origin === 'file'
-                  ? 'DISK'
-                  : preset.bankType === 'factory'
-                    ? 'ROM'
-                    : 'BASE'}
-            </span>
-          )}
+          ) : null}
           <span className={`h-2 w-2 rounded-full ${ledClasses}`} />
         </span>
       </div>

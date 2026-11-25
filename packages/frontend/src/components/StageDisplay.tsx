@@ -1,10 +1,10 @@
 import React from 'react';
-import type {
-  ConfirmedDeviceState,
-  DeviceSyncStatus,
-  Preset,
-  PresetOrigin,
-  SentCommandRecord,
+import {
+  type ConfirmedDeviceState,
+  type DeviceSyncStatus,
+  type Preset,
+  type SentCommandRecord,
+  classifyPresetCategory,
 } from '@quicktone/shared';
 
 interface StageDisplayProps {
@@ -13,13 +13,6 @@ interface StageDisplayProps {
   confirmedState: ConfirmedDeviceState;
   lastSentCommand: SentCommandRecord | null;
 }
-
-const ORIGIN_LABELS: Record<PresetOrigin, string> = {
-  hardware: 'Hardware Live',
-  file: 'QuickTone .nuxpreset',
-  factory: 'ROM Fábrica',
-  placeholder: 'Slot Base',
-};
 
 const SIGNAL_CHAIN_NODES: ReadonlyArray<{
   key: keyof NonNullable<Preset['signalChain']>;
@@ -63,9 +56,11 @@ export const StageDisplay: React.FC<StageDisplayProps> = ({
       ? `Slot ${confirmedState.presetId}`
       : 'Selecione um preset');
 
-  const originLabel = activePreset
-    ? ORIGIN_LABELS[activePreset.origin ?? (activePreset.bankType === 'factory' ? 'factory' : 'file')]
-    : 'Sem leitura';
+  const categoryLabel = activePreset
+    ? classifyPresetCategory(activePreset) === 'factory'
+      ? 'FÁBRICA'
+      : 'USUÁRIO'
+    : 'SEM LEITURA';
 
   const statusTag = isConfirmed
     ? {
@@ -91,9 +86,9 @@ export const StageDisplay: React.FC<StageDisplayProps> = ({
       <div className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/[0.06] pb-2.5">
           <div className="flex items-center gap-2 font-mono text-[11px] tracking-wider text-[#8E95A2]">
-            <span>OLED CHASSIS</span>
+            <span>PRESET ATIVO</span>
             <span className="text-white/20">/</span>
-            <span>{originLabel.toUpperCase()}</span>
+            <span>{categoryLabel}</span>
           </div>
 
           <span
@@ -112,21 +107,12 @@ export const StageDisplay: React.FC<StageDisplayProps> = ({
               {displayName}
             </h1>
           </div>
-
-          {activePreset ? (
-            <div className="hidden shrink-0 items-center gap-3 font-mono text-xs text-[#8E95A2] tabular-nums sm:flex">
-              <span>P.LVL {activePreset.patchVolume}%</span>
-              {activePreset.irVolume !== undefined ? (
-                <span>IR {activePreset.irVolume}</span>
-              ) : null}
-            </div>
-          ) : null}
         </div>
 
         <div
           data-testid="signal-chain-strip"
           aria-label="Cadeia de sinal do preset (somente leitura)"
-          className="grid grid-cols-9 gap-1 pt-1"
+          className="grid grid-cols-5 gap-1 pt-1 sm:grid-cols-9"
         >
           {SIGNAL_CHAIN_NODES.map((node) => {
             const hasChain = Boolean(activePreset?.signalChain);

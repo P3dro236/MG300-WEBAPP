@@ -26,7 +26,7 @@ export const QrCodeSvg: React.FC<QrCodeSvgProps> = ({
     );
   }
 
-  const quiet = 2;
+  const quiet = 4;
   const total = matrix.size + quiet * 2;
   const rects: Array<{ x: number; y: number }> = [];
   for (let r = 0; r < matrix.size; r++) {

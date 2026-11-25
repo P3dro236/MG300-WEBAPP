@@ -1,19 +1,21 @@
 import React, { useMemo, useState } from 'react';
-import type {
-  ConfirmedDeviceState,
-  Preset,
-  PresetsDirectoryStatus,
-  SentCommandRecord,
+import {
+  type ConfirmedDeviceState,
+  type Preset,
+  type SentCommandRecord,
+  classifyPresetCategory,
+  filterVisibleLibraryPresets,
 } from '@quicktone/shared';
 import { PresetCard, resolvePresetStatus } from './PresetCard';
 import { StageFootswitchDeck } from './StageFootswitchDeck';
 import { groupPresetsByBank } from '../utils/preset-groups';
 
-export type PresetFilter = 'all' | 'user' | 'factory';
+export type PresetFilter = 'user' | 'factory';
 export type PresetViewMode = 'stage' | 'matrix';
 
 interface PresetGridProps {
   presets: Preset[];
+  alreadyFiltered?: boolean;
   filter: PresetFilter;
   viewMode: PresetViewMode;
   onChangeFilter: (filter: PresetFilter) => void;
@@ -21,16 +23,14 @@ interface PresetGridProps {
   confirmedState: ConfirmedDeviceState;
   lastSentCommand: SentCommandRecord | null;
   disabled: boolean;
-  directoryStatus: PresetsDirectoryStatus;
-  presetsDirectory: string | null;
   isReloadingPresets?: boolean;
   onSelectPreset: (preset: Preset) => void;
-  onOpenSettings: () => void;
   onReloadPresets?: () => void;
 }
 
 export const PresetGrid: React.FC<PresetGridProps> = ({
   presets,
+  alreadyFiltered = false,
   filter,
   viewMode,
   onChangeFilter,
@@ -38,29 +38,32 @@ export const PresetGrid: React.FC<PresetGridProps> = ({
   confirmedState,
   lastSentCommand,
   disabled,
-  directoryStatus,
-  presetsDirectory,
   isReloadingPresets = false,
   onSelectPreset,
-  onOpenSettings,
   onReloadPresets,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
 
+  const visiblePresets = useMemo(
+    () => (alreadyFiltered ? presets : filterVisibleLibraryPresets(presets)),
+    [presets, alreadyFiltered],
+  );
+
   const userCount = useMemo(
-    () => presets.filter((p) => p.bankType === 'user').length,
-    [presets],
+    () => visiblePresets.filter((p) => classifyPresetCategory(p) === 'user').length,
+    [visiblePresets],
   );
   const factoryCount = useMemo(
-    () => presets.filter((p) => p.bankType === 'factory').length,
-    [presets],
+    () => visiblePresets.filter((p) => classifyPresetCategory(p) === 'factory').length,
+    [visiblePresets],
   );
 
   const filteredPresets = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
-    return presets.filter((preset) => {
-      if (filter === 'user' && preset.bankType !== 'user') return false;
-      if (filter === 'factory' && preset.bankType !== 'factory') return false;
+    return visiblePresets.filter((preset) => {
+      if (classifyPresetCategory(preset) !== filter) {
+        return false;
+      }
       if (query.length > 0) {
         return (
           preset.name.toLowerCase().includes(query) ||
@@ -70,15 +73,12 @@ export const PresetGrid: React.FC<PresetGridProps> = ({
       }
       return true;
     });
-  }, [presets, filter, searchQuery]);
+  }, [visiblePresets, filter, searchQuery]);
 
   const groupedBanks = useMemo(
     () => groupPresetsByBank(filteredPresets),
     [filteredPresets],
   );
-
-  const effectiveDirectoryError =
-    directoryStatus === 'directory_not_found' || directoryStatus === 'error';
 
   return (
     <section
@@ -91,22 +91,9 @@ export const PresetGrid: React.FC<PresetGridProps> = ({
           <div className="flex flex-wrap items-center gap-1.5 font-mono text-xs tabular-nums">
             <button
               type="button"
-              data-testid="filter-tab-all"
-              onClick={() => onChangeFilter('all')}
-              className={`min-h-[36px] rounded border px-3 transition-colors duration-150 ${
-                filter === 'all'
-                  ? 'border-white/25 bg-[#1B1E24] font-semibold text-[#F3F4F6]'
-                  : 'border-white/[0.06] bg-[#090A0C] text-[#8E95A2] hover:border-white/15 hover:text-[#F3F4F6]'
-              }`}
-            >
-              Todos ({presets.length})
-            </button>
-
-            <button
-              type="button"
               data-testid="filter-tab-user"
               onClick={() => onChangeFilter('user')}
-              className={`min-h-[36px] rounded border px-3 transition-colors duration-150 ${
+              className={`min-h-[44px] rounded border px-3 transition-colors duration-150 sm:min-h-[36px] ${
                 filter === 'user'
                   ? 'border-white/25 bg-[#1B1E24] font-semibold text-[#F3F4F6]'
                   : 'border-white/[0.06] bg-[#090A0C] text-[#8E95A2] hover:border-white/15 hover:text-[#F3F4F6]'
@@ -119,7 +106,7 @@ export const PresetGrid: React.FC<PresetGridProps> = ({
               type="button"
               data-testid="filter-tab-factory"
               onClick={() => onChangeFilter('factory')}
-              className={`min-h-[36px] rounded border px-3 transition-colors duration-150 ${
+              className={`min-h-[44px] rounded border px-3 transition-colors duration-150 sm:min-h-[36px] ${
                 filter === 'factory'
                   ? 'border-white/25 bg-[#1B1E24] font-semibold text-[#F3F4F6]'
                   : 'border-white/[0.06] bg-[#090A0C] text-[#8E95A2] hover:border-white/15 hover:text-[#F3F4F6]'
@@ -135,7 +122,7 @@ export const PresetGrid: React.FC<PresetGridProps> = ({
                 type="button"
                 data-testid="view-mode-stage-btn"
                 onClick={() => onChangeViewMode('stage')}
-                className={`min-h-[32px] rounded-sm px-2.5 transition-colors duration-150 ${
+                className={`min-h-[40px] rounded-sm px-2.5 transition-colors duration-150 sm:min-h-[32px] ${
                   viewMode === 'stage'
                     ? 'bg-[#1B1E24] font-semibold text-[#F3F4F6]'
                     : 'text-[#8E95A2] hover:text-[#F3F4F6]'
@@ -147,7 +134,7 @@ export const PresetGrid: React.FC<PresetGridProps> = ({
                 type="button"
                 data-testid="view-mode-matrix-btn"
                 onClick={() => onChangeViewMode('matrix')}
-                className={`min-h-[32px] rounded-sm px-2.5 transition-colors duration-150 ${
+                className={`min-h-[40px] rounded-sm px-2.5 transition-colors duration-150 sm:min-h-[32px] ${
                   viewMode === 'matrix'
                     ? 'bg-[#1B1E24] font-semibold text-[#F3F4F6]'
                     : 'text-[#8E95A2] hover:text-[#F3F4F6]'
@@ -164,7 +151,7 @@ export const PresetGrid: React.FC<PresetGridProps> = ({
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Buscar preset ou banco..."
                 aria-label="Buscar preset"
-                className="min-h-[34px] w-full rounded border border-white/[0.08] bg-[#090A0C] px-2.5 font-mono text-xs text-[#F3F4F6] placeholder:text-[#525866] focus:border-white/25 focus:outline-none sm:w-48"
+                className="min-h-[44px] w-full rounded border border-white/[0.08] bg-[#090A0C] px-2.5 font-mono text-xs text-[#F3F4F6] placeholder:text-[#525866] focus:border-white/25 focus:outline-none sm:min-h-[34px] sm:w-48"
               />
             ) : null}
 
@@ -174,8 +161,8 @@ export const PresetGrid: React.FC<PresetGridProps> = ({
                 data-testid="reload-presets-btn"
                 disabled={isReloadingPresets}
                 onClick={onReloadPresets}
-                aria-label="Sincronizar presets do disco e da pedaleira"
-                className="inline-flex min-h-[34px] items-center gap-1.5 rounded border border-white/[0.08] bg-[#090A0C] px-2.5 font-mono text-[11px] text-[#F3F4F6] transition-colors duration-150 hover:border-white/25 hover:bg-[#1B1E24] disabled:opacity-50"
+                aria-label="Sincronizar presets da pedaleira"
+                className="inline-flex min-h-[44px] items-center gap-1.5 rounded border border-white/[0.08] bg-[#090A0C] px-2.5 font-mono text-[11px] text-[#F3F4F6] transition-colors duration-150 hover:border-white/25 hover:bg-[#1B1E24] disabled:opacity-50 sm:min-h-[34px]"
               >
                 <svg
                   aria-hidden="true"
@@ -199,28 +186,11 @@ export const PresetGrid: React.FC<PresetGridProps> = ({
           </div>
         </div>
 
-        {effectiveDirectoryError ? (
-          <div
-            data-testid="directory-error-banner"
-            className="flex flex-col justify-between gap-2 rounded border border-[#F59E0B]/40 bg-[#F59E0B]/10 p-3 font-mono text-xs text-[#F59E0B] sm:flex-row sm:items-center"
-          >
-            <div>
-              Pasta QuickTone indisponível ou não encontrada
-              {presetsDirectory ? `: "${presetsDirectory}"` : ''}.
-            </div>
-            <button
-              type="button"
-              onClick={onOpenSettings}
-              className="shrink-0 rounded border border-[#F59E0B]/50 bg-[#090A0C] px-3 py-1.5 text-xs font-semibold text-[#F59E0B] hover:border-[#F59E0B]"
-            >
-              Configurar pasta
-            </button>
-          </div>
-        ) : null}
-
         {filteredPresets.length === 0 ? (
           <div className="rounded border border-white/[0.06] bg-[#090A0C] p-6 text-center font-mono text-xs text-[#8E95A2]">
-            Nenhum preset encontrado neste filtro.
+            {filter === 'user'
+              ? 'Nenhum preset de usuário carregado. Conecte a MG-300 para sincronizar os timbres salvos.'
+              : 'Nenhum preset de fábrica encontrado neste filtro.'}
           </div>
         ) : viewMode === 'stage' ? (
           <StageFootswitchDeck

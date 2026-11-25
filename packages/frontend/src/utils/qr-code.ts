@@ -1,6 +1,6 @@
 /**
  * Deterministic dependency-free ISO/IEC 18004 QR Code matrix generator
- * supporting Byte mode with EC Level L for Versions 1..4 (up to 78 UTF-8 bytes).
+ * supporting Byte mode with EC Level L for Versions 1..5 (up to 106 UTF-8 bytes).
  */
 
 export interface QrMatrix {
@@ -22,6 +22,7 @@ const VERSION_SPECS: readonly VersionSpec[] = [
   { version: 2, size: 25, totalCodewords: 44, dataCodewords: 34, ecCodewords: 10, alignCenter: 18 },
   { version: 3, size: 29, totalCodewords: 70, dataCodewords: 55, ecCodewords: 15, alignCenter: 22 },
   { version: 4, size: 33, totalCodewords: 100, dataCodewords: 80, ecCodewords: 20, alignCenter: 26 },
+  { version: 5, size: 37, totalCodewords: 134, dataCodewords: 108, ecCodewords: 26, alignCenter: 30 },
 ];
 
 // GF(256) with primitive polynomial 0x11d (ISO/IEC 18004)

@@ -6,6 +6,14 @@ interface ErrorBannerProps {
   onDismiss: () => void;
 }
 
+function sanitizeUserErrorMessage(message: string): string {
+  return message
+    .replace(/\(\s*0x[0-9a-f]+\s*\)/gi, '')
+    .replace(/\b0x[0-9a-f]+\b/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
 export const ErrorBanner: React.FC<ErrorBannerProps> = ({ error, onDismiss }) => {
   if (!error) {
     return null;
@@ -33,11 +41,8 @@ export const ErrorBanner: React.FC<ErrorBannerProps> = ({ error, onDismiss }) =>
           <line x1="12" y1="8" x2="12" y2="12" />
           <line x1="12" y1="16" x2="12.01" y2="16" />
         </svg>
-        <div>
-          <span className="font-mono text-[11px] font-semibold uppercase tracking-wider text-[#EF4444]">
-            [{error.code}]
-          </span>{' '}
-          <span className="font-sans text-xs text-[#F3F4F6]">{error.message}</span>
+        <div className="font-sans text-xs text-[#F3F4F6]">
+          {sanitizeUserErrorMessage(error.message)}
         </div>
       </div>
 
@@ -46,7 +51,7 @@ export const ErrorBanner: React.FC<ErrorBannerProps> = ({ error, onDismiss }) =>
         data-testid="dismiss-error-btn"
         aria-label="Fechar aviso"
         onClick={onDismiss}
-        className="shrink-0 rounded border border-white/10 bg-[#090A0C] px-2 py-1 font-mono text-[11px] text-[#8E95A2] hover:border-white/25 hover:text-[#F3F4F6]"
+        className="min-h-[44px] shrink-0 rounded border border-white/10 bg-[#090A0C] px-3 py-1 font-mono text-[11px] text-[#8E95A2] hover:border-white/25 hover:text-[#F3F4F6] sm:min-h-[32px]"
       >
         Fechar
       </button>

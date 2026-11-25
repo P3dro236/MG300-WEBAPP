@@ -12,10 +12,12 @@ export default defineConfig({
       '/api': {
         target: backendTarget,
         changeOrigin: true,
+        xfwd: true,
       },
       '/ws': {
         target: backendTarget.replace(/^http/, 'ws'),
         ws: true,
+        xfwd: true,
       },
     },
   },

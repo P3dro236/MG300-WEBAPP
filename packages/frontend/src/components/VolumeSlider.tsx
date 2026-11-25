@@ -1,74 +1,47 @@
 import React from 'react';
 import type {
   ConfirmedDeviceState,
-  DeviceSyncStatus,
   SentCommandRecord,
-  VolumeTarget,
 } from '@quicktone/shared';
 
 interface VolumeSliderProps {
   volume: number;
-  volumeTarget: VolumeTarget;
-  syncStatus: DeviceSyncStatus;
   confirmedState: ConfirmedDeviceState;
   lastSentCommand: SentCommandRecord | null;
   disabled: boolean;
   onChangeVolume: (volume: number) => void;
-  onSelectTarget: (target: VolumeTarget) => void;
+  onInteractionStart?: () => void;
+  onInteractionEnd?: () => void;
 }
 
-const TARGET_OPTIONS: ReadonlyArray<{
-  id: VolumeTarget;
-  shortLabel: string;
-  title: string;
-  ariaLabel: string;
-}> = [
-  {
-    id: 'master_cc64',
-    shortLabel: 'Master (CC 64)',
-    title: 'Volume Master (CC 64)',
-    ariaLabel: 'Volume Master',
-  },
-  {
-    id: 'patch_cc74',
-    shortLabel: 'Patch Level (CC 74)',
-    title: 'Nível do Patch P.LVL (CC 74)',
-    ariaLabel: 'Patch Level',
-  },
-  {
-    id: 'expression_cc61',
-    shortLabel: 'Expressão (CC 61)',
-    title: 'Pedal de Expressão (CC 61)',
-    ariaLabel: 'Pedal de Expressão',
-  },
-];
-
-export const VolumeSlider: React.FC<VolumeSliderProps> = ({
+const VolumeSliderInner: React.FC<VolumeSliderProps> = ({
   volume,
-  volumeTarget,
-  syncStatus: _syncStatus,
   confirmedState,
   lastSentCommand,
   disabled,
   onChangeVolume,
-  onSelectTarget,
+  onInteractionStart,
+  onInteractionEnd,
 }) => {
-  const activeOption =
-    TARGET_OPTIONS.find((opt) => opt.id === volumeTarget) ?? TARGET_OPTIONS[0]!;
-
   const isVolumeConfirmed =
-    confirmedState.volume !== null && confirmedState.volumeTarget === volumeTarget;
+    confirmedState.volume !== null &&
+    (confirmedState.volumeTarget === null || confirmedState.volumeTarget === 'master_cc64');
 
   const hasUnconfirmedSentVolume =
     lastSentCommand?.type === 'volume_change' &&
     !lastSentCommand.confirmedByDevice &&
     lastSentCommand.volume !== undefined &&
-    lastSentCommand.volumeTarget === volumeTarget;
+    (lastSentCommand.volumeTarget === undefined ||
+      lastSentCommand.volumeTarget === 'master_cc64');
 
   const clampAndSend = (next: number): void => {
     const clamped = Math.max(0, Math.min(100, Math.round(next)));
     onChangeVolume(clamped);
   };
+
+  const trackStyle = {
+    '--volume-pct': `${volume}%`,
+  } as React.CSSProperties;
 
   return (
     <section
@@ -77,49 +50,36 @@ export const VolumeSlider: React.FC<VolumeSliderProps> = ({
     >
       <div className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex flex-wrap items-center gap-1.5">
-            {TARGET_OPTIONS.map((opt) => {
-              const selected = opt.id === volumeTarget;
-              return (
-                <button
-                  key={opt.id}
-                  type="button"
-                  data-testid={`volume-target-quick-${opt.id}`}
-                  onClick={() => onSelectTarget(opt.id)}
-                  className={`min-h-[34px] rounded border px-2.5 font-mono text-[11px] font-medium transition-colors duration-150 ${
-                    selected
-                      ? 'border-white/25 bg-[#1B1E24] text-[#F3F4F6]'
-                      : 'border-white/[0.06] bg-[#090A0C] text-[#8E95A2] hover:border-white/15 hover:text-[#F3F4F6]'
-                  }`}
+          <span className="font-mono text-xs font-semibold uppercase tracking-wider text-[#F3F4F6]">
+            Volume Master
+          </span>
+
+          <div className="flex min-h-[28px] items-center justify-end gap-2 font-mono tabular-nums">
+            <div className="flex min-w-[104px] justify-end">
+              {hasUnconfirmedSentVolume ? (
+                <span
+                  data-testid="sent-volume-badge"
+                  className="inline-flex min-w-[104px] items-center justify-center rounded border border-[#F59E0B]/40 bg-[#F59E0B]/10 px-2 py-0.5 text-[11px] text-[#F59E0B]"
                 >
-                  {opt.shortLabel}
-                </button>
-              );
-            })}
-          </div>
+                  Enviado: {lastSentCommand.volume}%
+                </span>
+              ) : null}
+            </div>
 
-          <div className="flex items-center gap-2 font-mono tabular-nums">
-            {hasUnconfirmedSentVolume ? (
-              <span
-                data-testid="sent-volume-badge"
-                className="rounded border border-[#F59E0B]/40 bg-[#F59E0B]/10 px-2 py-0.5 text-[11px] text-[#F59E0B]"
-              >
-                Enviado: {lastSentCommand.volume}%
-              </span>
-            ) : null}
-
-            {isVolumeConfirmed && confirmedState.volume !== null ? (
-              <span
-                data-testid="confirmed-volume-badge"
-                className="rounded border border-[#22C55E]/40 bg-[#22C55E]/10 px-2 py-0.5 text-[11px] text-[#22C55E]"
-              >
-                Confirmado: {confirmedState.volume}%
-              </span>
-            ) : null}
+            <div className="flex min-w-[120px] justify-end">
+              {isVolumeConfirmed && confirmedState.volume !== null ? (
+                <span
+                  data-testid="confirmed-volume-badge"
+                  className="inline-flex min-w-[120px] items-center justify-center rounded border border-[#22C55E]/40 bg-[#22C55E]/10 px-2 py-0.5 text-[11px] text-[#22C55E]"
+                >
+                  Confirmado: {confirmedState.volume}%
+                </span>
+              ) : null}
+            </div>
 
             <span
               data-testid="volume-value"
-              className="min-w-[3.2rem] text-right text-lg font-bold text-[#F3F4F6]"
+              className="w-14 shrink-0 text-right text-lg font-bold text-[#F3F4F6]"
             >
               {volume}%
             </span>
@@ -137,7 +97,7 @@ export const VolumeSlider: React.FC<VolumeSliderProps> = ({
             -5
           </button>
 
-          <div className="flex-1 px-1">
+          <div className="min-w-0 flex-1 px-1">
             <input
               data-testid="volume-slider"
               type="range"
@@ -146,7 +106,16 @@ export const VolumeSlider: React.FC<VolumeSliderProps> = ({
               step={1}
               value={volume}
               disabled={disabled}
-              aria-label={activeOption.ariaLabel}
+              aria-label="Volume Master"
+              style={trackStyle}
+              onPointerDown={onInteractionStart}
+              onPointerUp={onInteractionEnd}
+              onPointerCancel={onInteractionEnd}
+              onMouseDown={onInteractionStart}
+              onMouseUp={onInteractionEnd}
+              onTouchStart={onInteractionStart}
+              onTouchEnd={onInteractionEnd}
+              onBlur={onInteractionEnd}
               onChange={(e) => clampAndSend(Number(e.target.value))}
               className="chassis-fader"
             />
@@ -166,3 +135,5 @@ export const VolumeSlider: React.FC<VolumeSliderProps> = ({
     </section>
   );
 };
+
+export const VolumeSlider = React.memo(VolumeSliderInner);

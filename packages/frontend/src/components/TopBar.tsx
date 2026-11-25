@@ -15,7 +15,7 @@ interface TopBarProps {
   syncStatus: DeviceSyncStatus;
   confirmedState: ConfirmedDeviceState;
   lastSentCommand: SentCommandRecord | null;
-  deviceFirmwareVersion?: string | null;
+  hasLoadedInitialState?: boolean;
   isConnectingMidi: boolean;
   onConnectMidi: () => void;
   onDisconnectMidi: () => void;
@@ -29,7 +29,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   syncStatus,
   confirmedState,
   lastSentCommand,
-  deviceFirmwareVersion,
+  hasLoadedInitialState = true,
   isConnectingMidi,
   onConnectMidi,
   onDisconnectMidi,
@@ -75,7 +75,7 @@ export const TopBar: React.FC<TopBarProps> = ({
             syncStatus={syncStatus}
             confirmedState={confirmedState}
             lastSentCommand={lastSentCommand}
-            deviceFirmwareVersion={deviceFirmwareVersion}
+            hasLoadedInitialState={hasLoadedInitialState}
           />
         </div>
 
@@ -85,7 +85,7 @@ export const TopBar: React.FC<TopBarProps> = ({
             data-testid="midi-toggle-btn"
             onClick={isConnected ? onDisconnectMidi : onConnectMidi}
             disabled={isConnectingMidi}
-            className={`inline-flex min-h-[38px] items-center rounded border px-3 font-mono text-xs font-medium transition-colors duration-150 ${
+            className={`inline-flex min-h-[44px] items-center rounded border px-3 font-mono text-xs font-medium transition-colors duration-150 sm:min-h-[38px] ${
               isConnected
                 ? 'border-white/15 bg-[#1B1E24] text-[#F3F4F6] hover:border-white/25'
                 : 'border-[#F59E0B]/50 bg-[#1B1E24] text-[#F59E0B] hover:border-[#F59E0B]'
@@ -99,7 +99,7 @@ export const TopBar: React.FC<TopBarProps> = ({
             data-testid="open-settings-btn"
             aria-label="Abrir configurações"
             onClick={onOpenSettings}
-            className="inline-flex min-h-[38px] min-w-[38px] items-center justify-center gap-1.5 rounded border border-white/10 bg-[#14161A] px-2.5 font-mono text-xs text-[#F3F4F6] transition-colors duration-150 hover:border-white/25 hover:bg-[#1B1E24]"
+            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center gap-1.5 rounded border border-white/10 bg-[#14161A] px-2.5 font-mono text-xs text-[#F3F4F6] transition-colors duration-150 hover:border-white/25 hover:bg-[#1B1E24] sm:min-h-[38px] sm:min-w-[38px]"
           >
             <svg
               aria-hidden="true"

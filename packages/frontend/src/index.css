@@ -47,8 +47,18 @@ input[type='range'].chassis-fader:focus-visible {
 input[type='range'].chassis-fader::-webkit-slider-runnable-track {
   height: 10px;
   border-radius: 2px;
+  background: linear-gradient(
+    to right,
+    #d1d5db 0%,
+    #d1d5db var(--volume-pct, 50%),
+    #090a0c var(--volume-pct, 50%),
+    #090a0c 100%
+  );
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+input[type='range'].chassis-fader:disabled::-webkit-slider-runnable-track {
   background: #090a0c;
-  border: 1px solid rgba(255, 255, 255, 0.12);
 }
 
 input[type='range'].chassis-fader::-webkit-slider-thumb {
@@ -71,8 +81,18 @@ input[type='range'].chassis-fader:disabled::-webkit-slider-thumb {
 input[type='range'].chassis-fader::-moz-range-track {
   height: 10px;
   border-radius: 2px;
+  background: linear-gradient(
+    to right,
+    #d1d5db 0%,
+    #d1d5db var(--volume-pct, 50%),
+    #090a0c var(--volume-pct, 50%),
+    #090a0c 100%
+  );
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+input[type='range'].chassis-fader:disabled::-moz-range-track {
   background: #090a0c;
-  border: 1px solid rgba(255, 255, 255, 0.12);
 }
 
 input[type='range'].chassis-fader::-moz-range-thumb {
