@@ -10,16 +10,19 @@ import {
   type SentCommandRecord,
   type UpdateVolumeRequest,
   type VolumeTarget,
+  isValidMg300UserSlot,
   parseBankLabel,
 } from '@quicktone/shared';
 import {
   QuickToneDiscoveryService,
   buildPresetFromStruct102,
+  createFactoryPresets,
   createUserPlaceholderPresets,
 } from '@quicktone/reader';
 import {
   type IMidiAdapter,
   MidiService,
+  MidiServiceError,
   type MidiServiceOptions,
   MockMidiAdapter,
   WinMmMidiAdapter,
@@ -51,6 +54,13 @@ export interface ControllerStateManagerOptions {
   autoConnectMidiOnInit?: boolean;
 }
 
+function getLanAddressPriority(ip: string): number {
+  if (ip.startsWith('192.168.')) return 0;
+  if (ip.startsWith('10.')) return 1;
+  if (ip.startsWith('172.')) return 2;
+  return 3;
+}
+
 export function getLocalLanAddresses(): string[] {
   const interfaces = os.networkInterfaces();
   const addresses: string[] = [];
@@ -64,7 +74,9 @@ export function getLocalLanAddresses(): string[] {
       }
     }
   }
-  return Array.from(new Set(addresses));
+  return Array.from(new Set(addresses)).sort(
+    (a, b) => getLanAddressPriority(a) - getLanAddressPriority(b),
+  );
 }
 
 export function resolveServerPort(rawPort: string | number | undefined, fallback = 3001): number {
@@ -93,6 +105,7 @@ export class ControllerStateManager {
   private readonly autoConnectMidiOnInit: boolean;
   private readonly fillMissingUserSlots: boolean;
   private readonly enableSysExSync: boolean;
+  private readonly useFilesystemDiscovery: boolean;
   private authToken: string | null;
   private lanUrls: string[];
   private diskPresetsResponse: PresetsResponse;
@@ -111,11 +124,16 @@ export class ControllerStateManager {
   private unsubscribeWatcher: () => void;
 
   constructor(options: ControllerStateManagerOptions = {}) {
+    const includeFactory = options.includeFactoryPresets ?? true;
+    this.useFilesystemDiscovery =
+      options.discoveryService !== undefined ||
+      (options.presetsDirectory !== undefined && options.presetsDirectory !== null);
+
     this.discoveryService =
       options.discoveryService ??
       new QuickToneDiscoveryService({
         directoryPath: options.presetsDirectory,
-        includeFactoryPresets: options.includeFactoryPresets ?? false,
+        includeFactoryPresets: includeFactory,
       });
 
     if (options.midiService) {
@@ -141,7 +159,14 @@ export class ControllerStateManager {
     this.lanUrls =
       options.lanUrls ??
       computeLocalLanUrls(resolveServerPort(options.serverPort ?? process.env.PORT));
-    this.diskPresetsResponse = this.discoveryService.getLastResult();
+    this.diskPresetsResponse = this.useFilesystemDiscovery
+      ? this.discoveryService.getLastResult()
+      : {
+          presets: includeFactory ? createFactoryPresets() : [],
+          directory: null,
+          directoryStatus: 'ok',
+          warnings: [],
+        };
     this.presetsResponse = this.mergePresetsResponse(this.diskPresetsResponse);
 
     this.unsubscribeMidiState = this.midiService.onStateChange((midiState) => {
@@ -160,15 +185,7 @@ export class ControllerStateManager {
           clearTimeout(this.hardwareDumpFlushTimer);
           this.hardwareDumpFlushTimer = null;
         }
-        if (this.hardwarePresets.size > 0) {
-          this.hardwarePresets.clear();
-          this.presetsResponse = this.mergePresetsResponse(this.diskPresetsResponse);
-          const nextState = this.getState();
-          const nextPresets = this.getPresetsResponse();
-          for (const listener of this.presetsListeners) {
-            listener(nextPresets, nextState);
-          }
-        }
+        // Preserve last valid hardwarePresets across transient disconnects so valid data is never wiped
       }
 
       this.emitStateChange();
@@ -182,9 +199,11 @@ export class ControllerStateManager {
       this.handleHardwarePresetDump(slotIndex, struct102);
     });
 
-    this.unsubscribeWatcher = this.discoveryService.watchDirectory((result) => {
-      this.handleDiscoveryUpdate(result);
-    });
+    this.unsubscribeWatcher = this.useFilesystemDiscovery
+      ? this.discoveryService.watchDirectory((result) => {
+          this.handleDiscoveryUpdate(result);
+        })
+      : () => {};
   }
 
   public async initialize(force = false): Promise<void> {
@@ -192,21 +211,25 @@ export class ControllerStateManager {
       return;
     }
     this.initialized = true;
-    this.diskPresetsResponse = await this.discoveryService.discover();
-    this.presetsResponse = this.mergePresetsResponse(this.diskPresetsResponse);
-    this.unsubscribeWatcher();
-    this.unsubscribeWatcher = this.discoveryService.watchDirectory((result) => {
-      this.handleDiscoveryUpdate(result);
-    });
-
-    await this.midiService.discoverPorts();
+    if (this.useFilesystemDiscovery) {
+      this.diskPresetsResponse = await this.discoveryService.discover();
+      this.presetsResponse = this.mergePresetsResponse(this.diskPresetsResponse);
+      this.unsubscribeWatcher();
+      this.unsubscribeWatcher = this.discoveryService.watchDirectory((result) => {
+        this.handleDiscoveryUpdate(result);
+      });
+    } else {
+      this.presetsResponse = this.mergePresetsResponse(this.diskPresetsResponse);
+    }
 
     if (this.autoConnectMidiOnInit) {
       try {
         await this.midiService.connect();
       } catch {
-        // Permanece desconectado/erro se nenhuma pedaleira estiver conectada no boot
+        // Permanece em erro/desconectado caso nenhuma pedaleira esteja conectada no boot
       }
+    } else {
+      await this.midiService.discoverPorts();
     }
 
     this.emitStateChange();
@@ -296,12 +319,11 @@ export class ControllerStateManager {
   public async refreshPresets(): Promise<PresetsResponse> {
     const willSyncHardware =
       this.midiService.isConnected() && this.enableSysExSync;
-    if (willSyncHardware) {
-      this.hardwarePresets.clear();
-    }
-    const result = await this.discoveryService.reload();
-    if (this.diskPresetsResponse !== result) {
-      this.handleDiscoveryUpdate(result);
+    if (this.useFilesystemDiscovery) {
+      const result = await this.discoveryService.reload();
+      if (this.diskPresetsResponse !== result) {
+        this.handleDiscoveryUpdate(result);
+      }
     }
     if (willSyncHardware) {
       void this.syncHardwareState();
@@ -390,19 +412,15 @@ export class ControllerStateManager {
     state: ControllerState;
     command: SentCommandRecord;
   }> {
-    const command = await this.midiService.setVolume(request.volume, request.target);
+    if (request.target !== undefined && request.target !== 'master_cc64') {
+      throw new MidiServiceError(
+        'INVALID_MIDI_VALUE',
+        'Apenas o Volume Master é permitido para controle de volume.',
+      );
+    }
+    const command = await this.midiService.setVolume(request.volume, 'master_cc64');
     if (this.enableSysExSync) {
-      const resolvedTarget = request.target ?? this.midiService.getState().volumeTarget;
-      if (resolvedTarget === 'patch_cc74') {
-        const activeSlot =
-          this.midiService.getState().confirmedState.slotIndex ??
-          this.midiService.getState().lastSentCommand?.slotIndex;
-        if (activeSlot !== null && activeSlot !== undefined) {
-          this.scheduleHardwareReadback('patch', activeSlot);
-        }
-      } else {
-        this.scheduleHardwareReadback('global');
-      }
+      this.scheduleHardwareReadback('global');
     }
     return {
       state: this.getState(),
@@ -411,7 +429,13 @@ export class ControllerStateManager {
   }
 
   public setVolumeTarget(target: VolumeTarget): { state: ControllerState } {
-    this.midiService.setVolumeTarget(target);
+    if (target !== 'master_cc64') {
+      throw new MidiServiceError(
+        'INVALID_MIDI_VALUE',
+        'Apenas o Volume Master é suportado.',
+      );
+    }
+    this.midiService.setVolumeTarget('master_cc64');
     return { state: this.getState() };
   }
 
@@ -530,6 +554,25 @@ export class ControllerStateManager {
         this.handleDiscoveryUpdate(this.diskPresetsResponse);
       }, 45);
     }
+  }
+
+  /**
+   * Immediately reflects a verified `0x0E` User slot write in the merged preset library
+   * and notifies subscribed WebSocket clients.
+   */
+  public applySavedHardwarePreset(slotIndex: number, struct102: Uint8Array): void {
+    if (!isValidMg300UserSlot(slotIndex)) {
+      return;
+    }
+    const preset = buildPresetFromStruct102(struct102, slotIndex, {
+      origin: 'hardware',
+    });
+    this.hardwarePresets.set(slotIndex, preset);
+    if (this.hardwareDumpFlushTimer !== null) {
+      clearTimeout(this.hardwareDumpFlushTimer);
+      this.hardwareDumpFlushTimer = null;
+    }
+    this.handleDiscoveryUpdate(this.diskPresetsResponse);
   }
 
   private mergePresetsResponse(diskResult: PresetsResponse): PresetsResponse {

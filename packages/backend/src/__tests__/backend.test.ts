@@ -269,7 +269,7 @@ describe('@quicktone/backend — Unit & Contract Tests (Section 7)', () => {
       ]);
     });
 
-    it('PUT /api/volume sends evidence-backed volume CC (master_cc64, patch_cc74, expression_cc61)', async () => {
+    it('PUT /api/volume sends Master Volume CC 0x40 and rejects non-Master targets', async () => {
       await app.inject({ method: 'POST', url: '/api/midi/connect', payload: {} });
 
       const masterRes = await app.inject({
@@ -290,14 +290,16 @@ describe('@quicktone/backend — Unit & Contract Tests (Section 7)', () => {
         url: '/api/volume',
         payload: { volume: 60, target: 'patch_cc74' },
       });
-      expect(patchRes.statusCode).toBe(200);
-      const patchState = ControllerStateSchema.parse(patchRes.json().state);
-      expect(patchState.volumeTarget).toBe('patch_cc74');
-      expect(patchState.lastSentCommand?.midiBytes).toEqual([
-        0xb0,
-        MG300_MIDI_CC.PATCH_LEVEL,
-        60,
-      ]);
+      expect(patchRes.statusCode).toBe(400);
+      expect(patchRes.json().code).toBe('VALIDATION_ERROR');
+
+      const exprRes = await app.inject({
+        method: 'PUT',
+        url: '/api/volume',
+        payload: { volume: 60, target: 'expression_cc61' },
+      });
+      expect(exprRes.statusCode).toBe(400);
+      expect(exprRes.json().code).toBe('VALIDATION_ERROR');
     });
 
     it('POST /api/presets/config updates presets directory and supports factory presets toggle', async () => {
@@ -595,7 +597,7 @@ describe('@quicktone/backend — Unit & Contract Tests (Section 7)', () => {
       expect(forbiddenRes.statusCode).toBe(403);
       expect(forbiddenRes.json().code).toBe('FORBIDDEN_ORIGIN');
 
-      // Control request from LAN IP is allowed and receives CORS header
+      // Unpaired control request from LAN IP receives LAN CORS header and requires QR pairing (401)
       const allowedLanRes = await app.inject({
         method: 'POST',
         url: '/api/midi/connect',
@@ -604,9 +606,24 @@ describe('@quicktone/backend — Unit & Contract Tests (Section 7)', () => {
         },
         payload: {},
       });
-      expect(allowedLanRes.statusCode).toBe(200);
+      expect(allowedLanRes.statusCode).toBe(401);
+      expect(allowedLanRes.json().code).toBe('PAIRING_REQUIRED');
       expect(allowedLanRes.headers['access-control-allow-origin']).toBe(
         'http://192.168.0.105:5173',
+      );
+
+      // Same-origin local desktop request succeeds (200)
+      const localDesktopRes = await app.inject({
+        method: 'POST',
+        url: '/api/midi/connect',
+        headers: {
+          origin: 'http://localhost:5173',
+        },
+        payload: {},
+      });
+      expect(localDesktopRes.statusCode).toBe(200);
+      expect(localDesktopRes.headers['access-control-allow-origin']).toBe(
+        'http://localhost:5173',
       );
     });
 
@@ -718,14 +735,21 @@ describe('@quicktone/backend — Unit & Contract Tests (Section 7)', () => {
       }
     });
 
-    it('supports POST /api/volume/target and merges live hardware SysEx preset dumps', async () => {
+    it('rejects non-Master POST /api/volume/target and merges live hardware SysEx preset dumps', async () => {
       const targetRes = await app.inject({
         method: 'POST',
         url: '/api/volume/target',
         payload: { target: 'patch_cc74' },
       });
-      expect(targetRes.statusCode).toBe(200);
-      expect(targetRes.json().state.volumeTarget).toBe('patch_cc74');
+      expect(targetRes.statusCode).toBe(400);
+
+      const masterTargetRes = await app.inject({
+        method: 'POST',
+        url: '/api/volume/target',
+        payload: { target: 'master_cc64' },
+      });
+      expect(masterTargetRes.statusCode).toBe(200);
+      expect(masterTargetRes.json().state.volumeTarget).toBe('master_cc64');
 
       // Connect and simulate incoming 113B SysEx preset dump for slot 2 (1C)
       await app.inject({
@@ -770,7 +794,7 @@ describe('@quicktone/backend — Unit & Contract Tests (Section 7)', () => {
       expect(slot1C?.signalChain?.ampEnabled).toBe(true);
     });
 
-    it('rejects unauthenticated /ws upgrade with 401 when authToken is enabled and forwards server options in startBackendServer', async () => {
+    it('rejects unauthenticated /ws upgrade with 401 when authToken is enabled and omits placeholder presets in startBackendServer', async () => {
       app.stateManager.setAuthToken('2580');
       await app.listen({ host: '127.0.0.1', port: 0 });
       const address = app.server.address();
@@ -787,7 +811,7 @@ describe('@quicktone/backend — Unit & Contract Tests (Section 7)', () => {
       expect(syncMsg.type).toBe('state_sync');
       await authedClient.close();
 
-      // Verify startBackendServer forwards fillMissingUserSlots & includeFactoryPresets (72 slots total)
+      // Verify startBackendServer disables placeholder user slots by default (2 disk + 36 factory = 38, zero placeholders)
       const started = await startBackendServer({
         host: '127.0.0.1',
         port: 0,
@@ -799,13 +823,409 @@ describe('@quicktone/backend — Unit & Contract Tests (Section 7)', () => {
         const res = await started.app.inject({ method: 'GET', url: '/api/presets' });
         expect(res.statusCode).toBe(200);
         const body = PresetsResponseSchema.parse(res.json());
-        expect(body.presets).toHaveLength(72);
+        expect(body.presets).toHaveLength(38);
+        expect(body.presets.some((p) => p.origin === 'placeholder')).toBe(false);
         const st = ControllerStateSchema.parse(
           (await started.app.inject({ method: 'GET', url: '/api/status' })).json(),
         );
         expect(st.lanUrls).toBeDefined();
       } finally {
         await started.app.close();
+      }
+    });
+  });
+
+  describe('7. Mandatory QR Pairing, Single Mobile Controller Limit & DNS Rebinding Protection', () => {
+    it('blocks remote unauthenticated access, requires desktop approval, enforces single mobile controller, supports revocation/expiration/rate-limit, and blocks DNS rebinding', async () => {
+      const pairingApp = createBackendApp({
+        midiAdapter: mockAdapter,
+        presetsDirectory: tempDir,
+        includeFactoryPresets: true,
+        staticDir: null,
+        pairingOptions: {
+          rateLimitMaxAttempts: 3,
+          rateLimitWindowMs: 30_000,
+          sessionTtlMs: 2000,
+        },
+      });
+      await pairingApp.listen({ host: '127.0.0.1', port: 0 });
+      const addr = pairingApp.server.address();
+      const port = typeof addr === 'object' && addr ? addr.port : 0;
+
+      try {
+        const remoteHeaders = {
+          'x-forwarded-for': '192.168.1.50',
+          origin: 'http://192.168.1.50:3001',
+        };
+
+        // 1. DNS Rebinding protection: external Host rejected on HTTP and WS
+        const rebindRes = await pairingApp.inject({
+          method: 'GET',
+          url: '/api/health',
+          headers: { host: 'evil.attacker.com:3001' },
+        });
+        expect(rebindRes.statusCode).toBe(403);
+        expect(rebindRes.json().code).toBe('FORBIDDEN_HOST');
+
+        await expect(
+          connectTestWsClient(`ws://127.0.0.1:${port}/ws`, {
+            Host: 'evil.attacker.com:3001',
+          }),
+        ).rejects.toThrow();
+
+        // 2. Remote phone without pairing session is blocked on HTTP & WS
+        const unauthRemoteStatus = await pairingApp.inject({
+          method: 'GET',
+          url: '/api/status',
+          headers: remoteHeaders,
+        });
+        expect(unauthRemoteStatus.statusCode).toBe(401);
+        expect(unauthRemoteStatus.json().code).toBe('PAIRING_REQUIRED');
+
+        const unauthRemoteSelect = await pairingApp.inject({
+          method: 'POST',
+          url: '/api/presets/select',
+          headers: remoteHeaders,
+          payload: { presetId: '1A' },
+        });
+        expect(unauthRemoteSelect.statusCode).toBe(401);
+
+        await expect(
+          connectTestWsClient(`ws://127.0.0.1:${port}/ws`, {
+            Origin: 'http://192.168.1.50:3001',
+          }),
+        ).rejects.toThrow();
+
+        // 3. Rate limiting on invalid pairing attempts
+        for (let i = 0; i < 3; i++) {
+          const badPair = await pairingApp.inject({
+            method: 'POST',
+            url: '/api/pairing/request',
+            headers: remoteHeaders,
+            payload: { pairingCode: 'INVALID_CODE_XYZ', deviceName: 'Attacker' },
+          });
+          expect(badPair.statusCode).toBe(401);
+        }
+        const rateLimited = await pairingApp.inject({
+          method: 'POST',
+          url: '/api/pairing/request',
+          headers: remoteHeaders,
+          payload: { pairingCode: 'INVALID_CODE_XYZ', deviceName: 'Attacker' },
+        });
+        expect(rateLimited.statusCode).toBe(429);
+        expect(rateLimited.json().code).toBe('RATE_LIMITED');
+
+        // 4. Desktop generates temporary QR challenge; Mobile A requests pairing
+        const phoneAHeaders = {
+          'x-forwarded-for': '192.168.1.51',
+          origin: 'http://192.168.1.51:3001',
+        };
+        const challengeRes = await pairingApp.inject({
+          method: 'POST',
+          url: '/api/pairing/challenge',
+          payload: {},
+        });
+        expect(challengeRes.statusCode).toBe(200);
+        const pairingCode = challengeRes.json().challenge.pairingCode as string;
+        expect(pairingCode.length).toBeGreaterThanOrEqual(6);
+
+        // Remote phone cannot create challenge or approve
+        const remoteApproveAttempt = await pairingApp.inject({
+          method: 'POST',
+          url: '/api/pairing/approve',
+          headers: phoneAHeaders,
+          payload: { requestId: 'fake' },
+        });
+        expect(remoteApproveAttempt.statusCode).toBe(403);
+        expect(remoteApproveAttempt.json().code).toBe('DESKTOP_ONLY');
+
+        const reqARes = await pairingApp.inject({
+          method: 'POST',
+          url: '/api/pairing/request',
+          headers: phoneAHeaders,
+          payload: { pairingCode, deviceName: 'iPhone Pedro' },
+        });
+        expect(reqARes.statusCode).toBe(200);
+        const { requestId: reqAId, claimSecret: secretA } = reqARes.json() as {
+          requestId: string;
+          claimSecret: string;
+        };
+
+        // Desktop approves Phone A
+        const approveARes = await pairingApp.inject({
+          method: 'POST',
+          url: '/api/pairing/approve',
+          payload: { requestId: reqAId },
+        });
+        expect(approveARes.statusCode).toBe(200);
+
+        // Phone A polls and receives HttpOnly session cookie
+        const pollARes = await pairingApp.inject({
+          method: 'POST',
+          url: '/api/pairing/poll',
+          headers: phoneAHeaders,
+          payload: { requestId: reqAId, claimSecret: secretA },
+        });
+        expect(pollARes.statusCode).toBe(200);
+        expect(pollARes.json().status).toBe('approved');
+        const setCookieA = pollARes.headers['set-cookie'];
+        const cookieA = (Array.isArray(setCookieA) ? setCookieA[0] : setCookieA)!
+          .split(';')[0]!;
+        expect(cookieA).toContain('mg300_session=');
+
+        // Phone A can now connect MIDI, change Master Volume, and open authenticated WS
+        const midiConnA = await pairingApp.inject({
+          method: 'POST',
+          url: '/api/midi/connect',
+          headers: { ...phoneAHeaders, cookie: cookieA },
+          payload: {},
+        });
+        expect(midiConnA.statusCode).toBe(200);
+
+        const wsA = await connectTestWsClient(`ws://127.0.0.1:${port}/ws`, {
+          Origin: 'http://192.168.1.51:3001',
+          Cookie: cookieA,
+        });
+        await wsA.waitForMessage((m) => m.type === 'state_sync');
+
+        // 5. Single mobile controller limit: pairing Phone B immediately revokes Phone A!
+        const phoneBHeaders = {
+          'x-forwarded-for': '192.168.1.52',
+          origin: 'http://192.168.1.52:3001',
+        };
+        const challenge2Res = await pairingApp.inject({
+          method: 'POST',
+          url: '/api/pairing/challenge',
+          payload: {},
+        });
+        const pairingCode2 = challenge2Res.json().challenge.pairingCode as string;
+
+        const reqBRes = await pairingApp.inject({
+          method: 'POST',
+          url: '/api/pairing/request',
+          headers: phoneBHeaders,
+          payload: { pairingCode: pairingCode2, deviceName: 'Galaxy S25' },
+        });
+        const { requestId: reqBId, claimSecret: secretB } = reqBRes.json() as {
+          requestId: string;
+          claimSecret: string;
+        };
+
+        const wsAClosedPromise = new Promise<number>((resolve) => {
+          wsA.ws.once('close', (code) => resolve(code));
+        });
+
+        await pairingApp.inject({
+          method: 'POST',
+          url: '/api/pairing/approve',
+          payload: { requestId: reqBId },
+        });
+
+        expect(await wsAClosedPromise).toBe(4001);
+
+        // Phone A's subsequent HTTP calls are rejected with 401 SESSION_REVOKED
+        const phoneARevokedRes = await pairingApp.inject({
+          method: 'PUT',
+          url: '/api/volume',
+          headers: { ...phoneAHeaders, cookie: cookieA },
+          payload: { volume: 40 },
+        });
+        expect(phoneARevokedRes.statusCode).toBe(401);
+        expect(phoneARevokedRes.json().code).toBe('SESSION_REVOKED');
+
+        // Phone B obtains session and controls Master Volume
+        const pollBRes = await pairingApp.inject({
+          method: 'POST',
+          url: '/api/pairing/poll',
+          headers: phoneBHeaders,
+          payload: { requestId: reqBId, claimSecret: secretB },
+        });
+        const setCookieB = pollBRes.headers['set-cookie'];
+        const cookieB = (Array.isArray(setCookieB) ? setCookieB[0] : setCookieB)!
+          .split(';')[0]!;
+
+        const volBRes = await pairingApp.inject({
+          method: 'PUT',
+          url: '/api/volume',
+          headers: { ...phoneBHeaders, cookie: cookieB },
+          payload: { volume: 65, target: 'master_cc64' },
+        });
+        expect(volBRes.statusCode).toBe(200);
+
+        // 6. Paired mobile session still receives full presets/status even if QUICKTONE_AUTH_TOKEN is enabled
+        pairingApp.stateManager.setAuthToken('9999');
+        const desktopChallengeDenied = await pairingApp.inject({
+          method: 'POST',
+          url: '/api/pairing/challenge',
+          payload: {},
+        });
+        expect(desktopChallengeDenied.statusCode).toBe(401);
+
+        const authedMobilePresets = await pairingApp.inject({
+          method: 'GET',
+          url: '/api/presets',
+          headers: { ...phoneBHeaders, cookie: cookieB },
+        });
+        expect(authedMobilePresets.statusCode).toBe(200);
+        expect(PresetsResponseSchema.parse(authedMobilePresets.json()).presets.length).toBeGreaterThan(0);
+
+        const authedMobileStatus = await pairingApp.inject({
+          method: 'GET',
+          url: '/api/status',
+          headers: { ...phoneBHeaders, cookie: cookieB },
+        });
+        expect(authedMobileStatus.statusCode).toBe(200);
+        expect(ControllerStateSchema.parse(authedMobileStatus.json()).lanUrls?.length).toBeGreaterThanOrEqual(0);
+        pairingApp.stateManager.setAuthToken(null);
+
+        // 7. Manual revocation by desktop immediately invalidates Phone B
+        await pairingApp.inject({
+          method: 'POST',
+          url: '/api/pairing/revoke',
+          payload: {},
+        });
+        const afterRevokeB = await pairingApp.inject({
+          method: 'GET',
+          url: '/api/status',
+          headers: { ...phoneBHeaders, cookie: cookieB },
+        });
+        expect(afterRevokeB.statusCode).toBe(401);
+        expect(afterRevokeB.json().code).toBe('SESSION_REVOKED');
+      } finally {
+        await pairingApp.close();
+      }
+    });
+
+    it('persists trusted devices across restart, reconnects via trusted-login without QR, and revokes on desktop removal', async () => {
+      const trustedStorePath = path.join(tempDir, 'trusted-devices.json');
+      const phoneHeaders = {
+        'x-forwarded-for': '192.168.1.77',
+        origin: 'http://192.168.1.77:3001',
+      };
+
+      const app1 = createBackendApp({
+        midiAdapter: mockAdapter,
+        presetsDirectory: tempDir,
+        includeFactoryPresets: false,
+        staticDir: null,
+        pairingOptions: { trustedDevicesPath: trustedStorePath },
+      });
+
+      let trustCookie = '';
+      let trustedDeviceId = '';
+
+      try {
+        const challengeRes = await app1.inject({
+          method: 'POST',
+          url: '/api/pairing/challenge',
+          payload: {},
+        });
+        const pairingCode = challengeRes.json().challenge.pairingCode as string;
+
+        const reqRes = await app1.inject({
+          method: 'POST',
+          url: '/api/pairing/request',
+          headers: phoneHeaders,
+          payload: { pairingCode, deviceName: 'Galaxy S25 Pedro' },
+        });
+        const { requestId, claimSecret } = reqRes.json() as {
+          requestId: string;
+          claimSecret: string;
+        };
+
+        await app1.inject({
+          method: 'POST',
+          url: '/api/pairing/approve',
+          payload: { requestId },
+        });
+
+        const pollRes = await app1.inject({
+          method: 'POST',
+          url: '/api/pairing/poll',
+          headers: phoneHeaders,
+          payload: { requestId, claimSecret },
+        });
+        const setCookies = pollRes.headers['set-cookie'];
+        const cookieList = Array.isArray(setCookies) ? setCookies : [setCookies!];
+        const foundTrust = cookieList.find((c) => c.startsWith('mg300_trusted_device='));
+        expect(foundTrust).toBeDefined();
+        trustCookie = foundTrust!.split(';')[0]!;
+
+        const desktopStatus = await app1.inject({
+          method: 'GET',
+          url: '/api/pairing/status',
+        });
+        expect(desktopStatus.json().trustedDevices).toHaveLength(1);
+        trustedDeviceId = desktopStatus.json().trustedDevices[0].deviceId as string;
+      } finally {
+        await app1.close();
+      }
+
+      // Simulate server restart loading persisted trusted-devices.json
+      const app2 = createBackendApp({
+        midiAdapter: mockAdapter,
+        presetsDirectory: tempDir,
+        includeFactoryPresets: false,
+        staticDir: null,
+        pairingOptions: { trustedDevicesPath: trustedStorePath },
+      });
+
+      try {
+        const mobileStatusBefore = await app2.inject({
+          method: 'GET',
+          url: '/api/pairing/status',
+          headers: { ...phoneHeaders, cookie: trustCookie },
+        });
+        expect(mobileStatusBefore.json().authenticated).toBe(false);
+        expect(mobileStatusBefore.json().isTrustedDevice).toBe(true);
+        expect(mobileStatusBefore.json().trustedDeviceName).toBe('Galaxy S25 Pedro');
+
+        // Reconnect without QR Code
+        const trustedLoginRes = await app2.inject({
+          method: 'POST',
+          url: '/api/pairing/trusted-login',
+          headers: { ...phoneHeaders, cookie: trustCookie },
+          payload: {},
+        });
+        expect(trustedLoginRes.statusCode).toBe(200);
+        const sessionCookie = (
+          Array.isArray(trustedLoginRes.headers['set-cookie'])
+            ? trustedLoginRes.headers['set-cookie'][0]
+            : trustedLoginRes.headers['set-cookie']
+        )!.split(';')[0]!;
+
+        const authedStatus = await app2.inject({
+          method: 'GET',
+          url: '/api/status',
+          headers: { ...phoneHeaders, cookie: `${sessionCookie}; ${trustCookie}` },
+        });
+        expect(authedStatus.statusCode).toBe(200);
+
+        // Desktop removes trusted device -> active session revoked & trusted-login denied
+        const removeRes = await app2.inject({
+          method: 'POST',
+          url: '/api/pairing/trusted/remove',
+          payload: { deviceId: trustedDeviceId },
+        });
+        expect(removeRes.statusCode).toBe(200);
+        expect(removeRes.json().trustedDevices).toHaveLength(0);
+
+        const afterRemove = await app2.inject({
+          method: 'GET',
+          url: '/api/status',
+          headers: { ...phoneHeaders, cookie: `${sessionCookie}; ${trustCookie}` },
+        });
+        expect(afterRemove.statusCode).toBe(401);
+
+        const retryLogin = await app2.inject({
+          method: 'POST',
+          url: '/api/pairing/trusted-login',
+          headers: { ...phoneHeaders, cookie: trustCookie },
+          payload: {},
+        });
+        expect(retryLogin.statusCode).toBe(401);
+      } finally {
+        await app2.close();
       }
     });
   });

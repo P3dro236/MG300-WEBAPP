@@ -281,25 +281,24 @@ describe('@quicktone/backend — End-to-End Backend Integration Tests (Section 7
     });
     expect(volumeRes.statusCode).toBe(200);
 
-    // Adjust Patch Volume P.LVL to 74
+    // Non-Master targets (Patch Level, Expression) must be rejected by backend
     const patchVolRes = await app.inject({
       method: 'PUT',
       url: '/api/volume',
       payload: { volume: 74, target: 'patch_cc74' },
     });
-    expect(patchVolRes.statusCode).toBe(200);
+    expect(patchVolRes.statusCode).toBe(400);
 
     // Verify exact bytes recorded by MockMidiAdapter
     const sentMessages = mockAdapter.getSentMessages();
     expect(sentMessages).toEqual([
       [0xb0, MG300_MIDI_CC.PRESET_SELECT, 6], // CC 0x3C = 6 (2C)
       [0xb0, MG300_MIDI_CC.MASTER_VOLUME, 88], // CC 0x40 = 88
-      [0xb0, MG300_MIDI_CC.PATCH_LEVEL, 74], // CC 0x4A = 74
     ]);
 
-    // Simulate hardware MIDI IN echo confirming preset 2C and patch volume 74
+    // Simulate hardware MIDI IN echo confirming preset 2C and Master Volume 88
     mockAdapter.simulateHardwareIncoming([0xb0, MG300_MIDI_CC.PRESET_SELECT, 6]);
-    mockAdapter.simulateHardwareIncoming([0xb0, MG300_MIDI_CC.PATCH_LEVEL, 74]);
+    mockAdapter.simulateHardwareIncoming([0xb0, MG300_MIDI_CC.MASTER_VOLUME, 88]);
 
     const statusRes = await app.inject({
       method: 'GET',
@@ -309,8 +308,8 @@ describe('@quicktone/backend — End-to-End Backend Integration Tests (Section 7
     expect(finalState.syncStatus).toBe('confirmed');
     expect(finalState.confirmedState.presetId).toBe('2C');
     expect(finalState.confirmedState.slotIndex).toBe(6);
-    expect(finalState.confirmedState.volume).toBe(74);
-    expect(finalState.confirmedState.volumeTarget).toBe('patch_cc74');
+    expect(finalState.confirmedState.volume).toBe(88);
+    expect(finalState.confirmedState.volumeTarget).toBe('master_cc64');
   });
 
   it('Scenario 3: Multi-client real-time WebSocket synchronization when Client A changes preset and volume', async () => {

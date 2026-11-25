@@ -3,9 +3,16 @@ import { fileURLToPath } from 'node:url';
 import {
   type BackendAppOptions,
   createBackendApp,
+  isAllowedLanHost,
   isAllowedLanOrigin,
+  isPrivateOrLoopbackIp,
   type QuickToneBackendApp,
 } from './app.js';
+import {
+  PairingError,
+  PairingManager,
+  type PairingManagerOptions,
+} from './pairing-manager.js';
 import {
   computeLocalLanUrls,
   ControllerStateManager,
@@ -19,12 +26,17 @@ import {
 export {
   createBackendApp,
   isAllowedLanOrigin,
+  isAllowedLanHost,
+  isPrivateOrLoopbackIp,
+  PairingManager,
+  PairingError,
   computeLocalLanUrls,
   getLocalLanAddresses,
   ControllerStateManager,
   PresetNotFoundError,
   type BackendAppOptions,
   type QuickToneBackendApp,
+  type PairingManagerOptions,
   type ControllerStateManagerOptions,
   type StateChangeListener,
   type PresetsUpdatedListener,
@@ -47,10 +59,16 @@ export async function startBackendServer(
   const app = createBackendApp({
     autoConnectMidiOnInit: true,
     includeFactoryPresets: options.includeFactoryPresets ?? true,
-    fillMissingUserSlots: options.fillMissingUserSlots ?? true,
+    fillMissingUserSlots: options.fillMissingUserSlots ?? false,
     enableSysExSync: options.enableSysExSync ?? isRealAdapter,
+    experimentalEdit:
+      options.experimentalEdit ?? process.env.QUICKTONE_EXPERIMENTAL_EDIT !== '0',
     serverPort: port,
     ...options,
+    pairingOptions: {
+      trustedDevicesPath: path.resolve(process.cwd(), 'data', 'trusted-devices.json'),
+      ...options.pairingOptions,
+    },
   });
 
   const address = await app.listen({ host, port });
