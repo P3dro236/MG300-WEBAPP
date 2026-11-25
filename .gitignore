@@ -5,7 +5,12 @@ coverage/
 playwright-report/
 test-results/
 *.log
+logs/
 .DS_Store
 Thumbs.db
 .env
 .env.local
+backups/
+/nuxpreset
+files/
+data/
