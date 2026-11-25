@@ -9,6 +9,7 @@ import {
   type SentCommandRecord,
   type VolumeTarget,
 } from '@quicktone/shared';
+import type { MidiDiagnosticsLogger } from './diagnostics-logger.js';
 
 export class MidiServiceError extends Error {
   public readonly code: MidiErrorCode;
@@ -48,6 +49,9 @@ export interface MidiServiceOptions {
   defaultChannel?: number;
   defaultVolumeTarget?: VolumeTarget;
   enableSysExQueries?: boolean;
+  /** Experimental branch only: allow the allowlisted real-time CCs and the 0x0E write to slot 4D. */
+  experimentalEdit?: boolean;
+  logger?: MidiDiagnosticsLogger;
 }
 
 export interface MidiServiceStateSnapshot {

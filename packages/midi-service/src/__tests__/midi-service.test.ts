@@ -1,12 +1,20 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildMg300GlobalStatusQuerySysEx,
   MG300_MIDI_CC,
 } from '@quicktone/shared';
+import { MidiDiagnosticsLogger } from '../diagnostics-logger.js';
 import { MidiService } from '../midi-service.js';
 import { MockMidiAdapter } from '../mock-adapter.js';
 import { MidiServiceError } from '../types.js';
-import { normalizeMidiBasePortName } from '../winmm-adapter.js';
+import {
+  normalizeMidiBasePortName,
+  WinMmMidiAdapter,
+  WinMmSendAckError,
+} from '../winmm-adapter.js';
 
 describe('MidiService & MockMidiAdapter', () => {
   let adapter: MockMidiAdapter;
@@ -206,24 +214,41 @@ describe('MidiService & MockMidiAdapter', () => {
       await service.connect();
     });
 
-    it('transmits CC 0x40 (64) for master_cc64, CC 0x4A (74) for patch_cc74, and CC 0x3D (61) for expression_cc61', async () => {
+    it('transmits CC 0x40 (64) exclusively for master_cc64 and rejects patch_cc74 / expression_cc61', async () => {
       const masterCmd = await service.setVolume(80, 'master_cc64');
       expect(masterCmd.midiBytes).toEqual([0xb0, 0x40, 80]);
       expect(masterCmd.volumeTarget).toBe('master_cc64');
 
-      const patchCmd = await service.setVolume(65, 'patch_cc74');
-      expect(patchCmd.midiBytes).toEqual([0xb0, 0x4a, 65]);
-      expect(patchCmd.volumeTarget).toBe('patch_cc74');
+      await expect(service.setVolume(65, 'patch_cc74')).rejects.toMatchObject({
+        name: 'MidiServiceError',
+        code: 'INVALID_MIDI_VALUE',
+      });
+      await expect(service.setVolume(100, 'expression_cc61')).rejects.toMatchObject({
+        name: 'MidiServiceError',
+        code: 'INVALID_MIDI_VALUE',
+      });
+      expect(() => service.setVolumeTarget('patch_cc74')).toThrow(MidiServiceError);
 
-      const exprCmd = await service.setVolume(100, 'expression_cc61');
-      expect(exprCmd.midiBytes).toEqual([0xb0, 0x3d, 100]);
-      expect(exprCmd.volumeTarget).toBe('expression_cc61');
+      // Incoming CC 74 / CC 61 must NOT overwrite confirmed Master Volume
+      adapter.simulateHardwareIncoming([0xb0, MG300_MIDI_CC.MASTER_VOLUME, 80]);
+      adapter.simulateHardwareIncoming([0xb0, MG300_MIDI_CC.PATCH_LEVEL, 42]);
+      adapter.simulateHardwareIncoming([0xb0, MG300_MIDI_CC.EXPRESSION_PEDAL, 15]);
+      expect(service.getState().confirmedState.volume).toBe(80);
+      expect(service.getState().confirmedState.volumeTarget).toBe('master_cc64');
 
-      expect(adapter.getSentMessages()).toEqual([
-        [0xb0, 0x40, 80],
-        [0xb0, 0x4a, 65],
-        [0xb0, 0x3d, 100],
+      expect(adapter.getSentMessages()).toEqual([[0xb0, 0x40, 80]]);
+    });
+
+    it('deduplicates concurrent connect() attempts without opening multiple sessions', async () => {
+      await service.disconnect();
+      const openSpy = vi.spyOn(adapter, 'openPort');
+      await Promise.all([
+        service.connect('NUX NME-300'),
+        service.connect('NUX NME-300'),
+        service.connect('NUX NME-300'),
       ]);
+      expect(openSpy).toHaveBeenCalledTimes(1);
+      expect(service.getState().connectionState).toBe('connected');
     });
 
     it('blocks standard MIDI CC 7 (which overwrites Delay block on NUX MG-300) and any unvalidated CC', async () => {
@@ -509,6 +534,301 @@ describe('MidiService & MockMidiAdapter', () => {
       expect(service.getState().confirmedState.presetId).toBe('2B');
       expect(service.getState().lastSentCommand).toBeNull();
       expect(service.getState().syncStatus).toBe('confirmed');
+
+      // Hardware physical knob turns Master Volume to 42 overriding pending 80
+      await service.setVolume(80, 'master_cc64');
+      expect(service.getState().syncStatus).toBe('command_sent_unconfirmed');
+      adapter.simulateHardwareIncoming([0xb0, MG300_MIDI_CC.MASTER_VOLUME, 42]);
+      expect(service.getState().confirmedState.volume).toBe(42);
+      expect(service.getState().lastSentCommand).toBeNull();
+      expect(service.getState().syncStatus).toBe('confirmed');
+    });
+  });
+
+  describe('11. Experimental Real-Time Editing CCs', () => {
+    it('allows CC 1..59, 71, 74 with exact range checks and blocks CC 70 when experimentalEdit is enabled', async () => {
+      const expService = new MidiService(adapter, {
+        strictMg300Safety: true,
+        experimentalEdit: true,
+      });
+      await expService.connect();
+
+      await expService.sendExperimentalControlChange(23, 75);
+      await expService.sendExperimentalControlChange(47, 60);
+      await expService.sendExperimentalControlChange(59, 2);
+      await expService.sendExperimentalControlChange(71, 40);
+      await expService.sendExperimentalControlChange(74, 85);
+
+      expect(adapter.getSentMessages()).toEqual([
+        [0xb0, 23, 75],
+        [0xb0, 47, 60],
+        [0xb0, 59, 2],
+        [0xb0, 71, 40],
+        [0xb0, 74, 85],
+      ]);
+
+      await expect(expService.sendExperimentalControlChange(70, 1)).rejects.toMatchObject({
+        code: 'UNVALIDATED_MESSAGE_BLOCKED',
+      });
+      await expect(expService.sendExperimentalControlChange(64, 50)).rejects.toMatchObject({
+        code: 'UNVALIDATED_MESSAGE_BLOCKED',
+      });
+      await expect(expService.sendExperimentalControlChange(60, 1)).rejects.toMatchObject({
+        code: 'UNVALIDATED_MESSAGE_BLOCKED',
+      });
+      await expect(expService.sendExperimentalControlChange(59, 3)).rejects.toMatchObject({
+        code: 'INVALID_MIDI_VALUE',
+      });
+      await expect(expService.sendExperimentalControlChange(71, 41)).rejects.toMatchObject({
+        code: 'INVALID_MIDI_VALUE',
+      });
+
+      adapter.setFailOnSend(true);
+      await expect(expService.sendExperimentalControlChange(23, 50)).rejects.toMatchObject({
+        code: 'TRANSMISSION_FAILED',
+      });
+      expect(expService.getState().lastError?.code).toBe('TRANSMISSION_FAILED');
+
+      expService.dispose();
+    });
+
+    it('validates block model IDs on CC 1..10 (allowing CAB=100 User IR, rejecting invalid models) and restricts 0x0E writes to User slots 0..35', async () => {
+      const { buildMg300PresetWriteSysEx, createBlankMg300Struct102 } = await import(
+        '@quicktone/shared'
+      );
+      const expService = new MidiService(adapter, {
+        strictMg300Safety: true,
+        experimentalEdit: true,
+      });
+      await expService.connect();
+
+      await expService.sendExperimentalControlChange(2, 12); // EFX Pitch Bender
+      await expService.sendExperimentalControlChange(3, 27); // AMP MLD
+      await expService.sendExperimentalControlChange(9, 100); // CAB User IR
+      await expService.sendExperimentalControlChange(10, 4); // MIC Cond C414
+      expect(adapter.getSentMessages()).toEqual([
+        [0xb0, 2, 12],
+        [0xb0, 3, 27],
+        [0xb0, 9, 100],
+        [0xb0, 10, 4],
+      ]);
+
+      await expect(expService.sendExperimentalControlChange(3, 28)).rejects.toMatchObject({
+        code: 'INVALID_MIDI_VALUE',
+      });
+      await expect(expService.sendExperimentalControlChange(9, 55)).rejects.toMatchObject({
+        code: 'INVALID_MIDI_VALUE',
+      });
+      await expect(expService.sendExperimentalControlChange(10, 5)).rejects.toMatchObject({
+        code: 'INVALID_MIDI_VALUE',
+      });
+
+      const draft = createBlankMg300Struct102({ name: 'Test 0E' });
+      const frame1A = buildMg300PresetWriteSysEx(draft, 0);
+      const frame9D = buildMg300PresetWriteSysEx(draft, 35);
+      await expService.sendExperimentalPresetWrite(frame1A);
+      await expService.sendExperimentalPresetWrite(frame9D);
+
+      // Tamper target slot byte to Factory F1A (36) and F9D (71) -> blocked
+      const factoryFrame = [...frame1A];
+      factoryFrame[8] = 36;
+      await expect(expService.sendExperimentalPresetWrite(factoryFrame)).rejects.toMatchObject({
+        code: 'UNVALIDATED_MESSAGE_BLOCKED',
+      });
+      factoryFrame[8] = 71;
+      await expect(expService.sendExperimentalPresetWrite(factoryFrame)).rejects.toMatchObject({
+        code: 'UNVALIDATED_MESSAGE_BLOCKED',
+      });
+
+      expService.dispose();
+    });
+  });
+
+  describe('12. Log de Diagnóstico e Auto-Recuperação WinMM em mmresult=1', () => {
+    it('writes structured diagnostic entries and rotates log file when exceeding maxBytes', () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qt-log-test-'));
+      try {
+        const logFile = path.join(tmpDir, 'midi-diagnostics.log');
+        const logger = new MidiDiagnosticsLogger({
+          logFilePath: logFile,
+          maxBytes: 80,
+          enabled: true,
+        });
+
+        logger.info('winmm', 'First entry\nwith multiline stderr', { mmresult: 1, op: 'midiOutLongMsg' });
+        logger.error('winmm', 'Second entry triggering rotation', { mmresult: 1, op: 'midiOutShortMsg' });
+
+        const current = fs.readFileSync(logFile, 'utf8');
+        const rotated = path.join(tmpDir, 'midi-diagnostics.prev.log');
+        expect(current).toContain('[ERROR] [winmm] Second entry triggering rotation');
+        expect(fs.existsSync(rotated)).toBe(true);
+        const rotatedContent = fs.readFileSync(rotated, 'utf8');
+        expect(rotatedContent).toContain('First entry \\n with multiline stderr');
+        expect(rotatedContent.trim().split('\n')).toHaveLength(1);
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('recovers once on mmresult=1 stall and disconnects with user-friendly message when retry fails', async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'qt-winmm-recover-'));
+      try {
+        const logFile = path.join(tmpDir, 'midi-diagnostics.log');
+        const logger = new MidiDiagnosticsLogger({ logFilePath: logFile, enabled: true });
+        const winmm = new WinMmMidiAdapter({ logger });
+
+        let sendAttempts = 0;
+        let openCalls = 0;
+        let closeCalls = 0;
+        const disconnectReasons: Array<string | undefined> = [];
+        winmm.onDisconnect((reason) => disconnectReasons.push(reason));
+
+        const internals = winmm as unknown as {
+          worker: object | null;
+          connectedPortName: string | null;
+          sendBytesOnce: (bytes: number[]) => Promise<void>;
+        };
+        internals.worker = {};
+        internals.connectedPortName = 'NUX NME-300';
+
+        vi.spyOn(winmm, 'closePort').mockImplementation(async () => {
+          closeCalls += 1;
+          internals.worker = null;
+          internals.connectedPortName = null;
+        });
+        vi.spyOn(winmm, 'openPort').mockImplementation(async (portName: string) => {
+          openCalls += 1;
+          internals.worker = {};
+          internals.connectedPortName = portName;
+          return { portName };
+        });
+
+        // Case 1: first send hits mmresult=1 -> closes, reopens once, retry succeeds
+        const sendOnceSpy = vi.spyOn(internals, 'sendBytesOnce').mockImplementation(async () => {
+          sendAttempts += 1;
+          if (sendAttempts === 1) {
+            throw new WinMmSendAckError(1, 'midiOutLongMsg');
+          }
+        });
+
+        await winmm.sendBytes([0xf0, 0x00, 0x11, 0x22, 0x66, 0x00, 0x00, 0xf7]);
+        expect(closeCalls).toBe(1);
+        expect(openCalls).toBe(1);
+        expect(sendAttempts).toBe(2);
+        expect(disconnectReasons).toHaveLength(0);
+
+        // Case 2: persistent mmresult=1 even after reconnect -> forces disconnect and throws user-friendly error
+        sendOnceSpy.mockImplementation(async () => {
+          throw new WinMmSendAckError(1, 'midiOutShortMsg');
+        });
+
+        try {
+          await winmm.sendBytes([0xb0, 0x3c, 15]);
+          expect.unreachable('Expected TRANSMISSION_FAILED');
+        } catch (err) {
+          expect(err).toBeInstanceOf(MidiServiceError);
+          const midiErr = err as MidiServiceError;
+          expect(midiErr.code).toBe('TRANSMISSION_FAILED');
+          expect(midiErr.message).not.toMatch(/WinMM|mmresult|MMSYSERR|MidiSrv/i);
+        }
+
+        expect(closeCalls).toBe(3);
+        expect(openCalls).toBe(2);
+        expect(winmm.isConnected()).toBe(false);
+        expect(disconnectReasons).toHaveLength(1);
+        expect(disconnectReasons[0]).not.toMatch(/WinMM|mmresult|MidiSrv/i);
+
+        const logContent = fs.readFileSync(logFile, 'utf8');
+        expect(logContent).toContain('mmresult=1');
+        expect(logContent).toContain('midiOutLongMsg');
+        expect(logContent).toContain('midiOutShortMsg');
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
+    it('preserves tri-state (unknown/null) and stall disconnect message in MidiService, and queues concurrent sends during recovery', async () => {
+      const winmm = new WinMmMidiAdapter({
+        logger: new MidiDiagnosticsLogger({ logFilePath: null }),
+      });
+
+      const internals = winmm as unknown as {
+        worker: object | null;
+        connectedPortName: string | null;
+        sendBytesOnce: (bytes: number[]) => Promise<void>;
+      };
+
+      vi.spyOn(winmm, 'listPorts').mockResolvedValue([
+        { id: 'nux-nme-300', name: 'NUX NME-300', direction: 'duplex', isMg300: true },
+      ]);
+      vi.spyOn(winmm, 'closePort').mockImplementation(async () => {
+        internals.worker = null;
+        internals.connectedPortName = null;
+      });
+      let openDelayMs = 0;
+      vi.spyOn(winmm, 'openPort').mockImplementation(async (portName: string) => {
+        if (openDelayMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, openDelayMs));
+        }
+        internals.worker = {};
+        internals.connectedPortName = portName;
+        return { portName };
+      });
+
+      const integratedService = new MidiService(winmm, {
+        autoReconnect: true,
+        reconnectIntervalMs: 60_000,
+        logger: new MidiDiagnosticsLogger({ logFilePath: null }),
+      });
+
+      try {
+        await integratedService.connect('NUX NME-300');
+
+        // 1. Concurrent send during recovery waits instead of failing with DISCONNECTED
+        let firstCall = true;
+        openDelayMs = 40;
+        const sendOnceSpy = vi.spyOn(internals, 'sendBytesOnce').mockImplementation(async () => {
+          if (firstCall) {
+            firstCall = false;
+            throw new WinMmSendAckError(1, 'midiOutShortMsg');
+          }
+        });
+
+        const p1 = integratedService.selectMg300Preset(0);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        expect(winmm.isConnected()).toBe(true);
+        const p2 = integratedService.setVolume(55, 'master_cc64');
+        await Promise.all([p1, p2]);
+
+        // Confirm state via MIDI IN
+        const rx = (winmm as unknown as { incomingListeners: Set<(b: number[]) => void> })
+          .incomingListeners;
+        for (const fn of rx) {
+          fn([0xb0, MG300_MIDI_CC.PRESET_SELECT, 0]);
+          fn([0xb0, MG300_MIDI_CC.MASTER_VOLUME, 55]);
+        }
+        expect(integratedService.getState().syncStatus).toBe('confirmed');
+
+        // 2. Persistent stall forces clean disconnect without corrupting tri-state or overwriting stall lastError
+        openDelayMs = 0;
+        sendOnceSpy.mockImplementation(async () => {
+          throw new WinMmSendAckError(1, 'midiOutShortMsg');
+        });
+
+        await expect(integratedService.selectMg300Preset(15)).rejects.toMatchObject({
+          code: 'TRANSMISSION_FAILED',
+        });
+
+        const afterStall = integratedService.getState();
+        expect(afterStall.connectionState).toBe('reconnecting');
+        expect(afterStall.syncStatus).toBe('unknown');
+        expect(afterStall.lastSentCommand).toBeNull();
+        expect(afterStall.confirmedState.presetId).toBeNull();
+        expect(afterStall.lastError?.code).toBe('DISCONNECTED');
+        expect(afterStall.lastError?.message).toMatch(/parou de responder/i);
+      } finally {
+        integratedService.dispose();
+      }
     });
   });
 });

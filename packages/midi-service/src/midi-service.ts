@@ -6,8 +6,12 @@ import {
   buildMg300PresetQuerySysEx,
   type ConfirmedDeviceState,
   type DeviceSyncStatus,
+  getExperimentalCcMaxValue,
+  isExperimentalPresetWriteSysEx,
   isSafeReadOnlyMg300SysEx,
+  isValidMg300ExperimentalCcValue,
   MG300_EFFECT_BLOCK_CCS,
+  MG300_EXPERIMENTAL_CC_ALLOWLIST,
   MG300_MIDI_CC,
   type MidiConnectionState,
   type MidiPortInfo,
@@ -17,6 +21,11 @@ import {
   slotIndexToBankCoordinate,
   type VolumeTarget,
 } from '@quicktone/shared';
+import {
+  formatHexBytes,
+  getSharedMidiDiagnosticsLogger,
+  type MidiDiagnosticsLogger,
+} from './diagnostics-logger.js';
 import {
   type IMidiAdapter,
   isMg300PortName,
@@ -70,6 +79,10 @@ export class MidiService {
   private commandCounter = 0;
   private reconnectTimer: ReturnType<typeof setInterval> | null = null;
   private isReconnectAttemptInFlight = false;
+  private connectInFlight: Promise<void> | null = null;
+  private readonly experimentalEdit: boolean;
+  private readonly logger: MidiDiagnosticsLogger;
+  private readonly rawSysExListeners = new Set<(bytes: number[]) => void>();
   private readonly stateListeners = new Set<(state: MidiServiceStateSnapshot) => void>();
   private readonly presetDumpListeners = new Set<
     (event: { slotIndex: number; struct102: Uint8Array }) => void
@@ -83,6 +96,8 @@ export class MidiService {
     this.reconnectIntervalMs = options.reconnectIntervalMs ?? 1500;
     this.strictMg300Safety = options.strictMg300Safety ?? true;
     this.defaultChannel = options.defaultChannel ?? 0;
+    this.experimentalEdit = options.experimentalEdit ?? false;
+    this.logger = options.logger ?? getSharedMidiDiagnosticsLogger();
     this.volumeTarget = options.defaultVolumeTarget ?? 'master_cc64';
 
     this.validateChannel(this.defaultChannel);
@@ -146,6 +161,29 @@ export class MidiService {
   }
 
   public async connect(portName?: string): Promise<void> {
+    if (this.connectInFlight) {
+      return this.connectInFlight;
+    }
+
+    const trimmedRequested = portName?.trim();
+    if (
+      this.isConnected() &&
+      (!trimmedRequested ||
+        trimmedRequested.toLowerCase() === this.connectedPortName?.toLowerCase())
+    ) {
+      return;
+    }
+
+    const promise = this.performConnect(trimmedRequested).finally(() => {
+      if (this.connectInFlight === promise) {
+        this.connectInFlight = null;
+      }
+    });
+    this.connectInFlight = promise;
+    return promise;
+  }
+
+  private async performConnect(trimmedPortName?: string): Promise<void> {
     this.stopReconnectLoop();
     this.connectionState = 'connecting';
     this.emitStateChange();
@@ -153,13 +191,16 @@ export class MidiService {
     try {
       await this.discoverPorts();
 
-      let targetPort = portName?.trim();
+      let targetPort = trimmedPortName;
       if (!targetPort) {
         const mg300Port = this.availablePorts.find((p) => p.isMg300);
         if (!mg300Port) {
+          this.logger.warn('midi-service', 'Connect failed: no MG-300 port found', {
+            availablePorts: this.availablePorts.map((p) => p.name),
+          });
           throw new MidiServiceError(
             'DEVICE_NOT_FOUND',
-            'Nenhuma pedaleira NUX MG-300 (NUX NME-300) encontrada nas portas MIDI.',
+            'Pedaleira NUX MG-300 não encontrada. Verifique se ela está ligada e conectada pelo cabo USB.',
           );
         }
         targetPort = mg300Port.name;
@@ -170,12 +211,18 @@ export class MidiService {
       this.lastTargetPortName = opened.portName;
       this.connectionState = 'connected';
       this.lastError = null;
+      this.logger.info('midi-service', 'Connected to MIDI port', { portName: opened.portName });
       if (this.confirmedState.confirmedAt === null && this.lastSentCommand === null) {
         this.syncStatus = 'unknown';
       }
       this.emitStateChange();
     } catch (err) {
       const midiError = this.normalizeError(err, 'DEVICE_NOT_FOUND');
+      this.logger.error('midi-service', 'MIDI connect error', {
+        requestedPort: trimmedPortName ?? 'auto',
+        code: midiError.code,
+        message: midiError.message,
+      });
       this.connectionState = 'error';
       this.connectedPortName = null;
       this.syncStatus = 'unknown';
@@ -204,10 +251,17 @@ export class MidiService {
     this.unsubscribeDisconnect();
     this.stateListeners.clear();
     this.presetDumpListeners.clear();
+    this.rawSysExListeners.clear();
   }
 
   public setVolumeTarget(target: VolumeTarget): void {
-    this.volumeTarget = target;
+    if (target !== 'master_cc64') {
+      throw new MidiServiceError(
+        'INVALID_MIDI_VALUE',
+        'Apenas o Volume Master é suportado para controle de volume.',
+      );
+    }
+    this.volumeTarget = 'master_cc64';
     this.emitStateChange();
   }
 
@@ -272,36 +326,33 @@ export class MidiService {
   }
 
   /**
-   * Adjusts volume on the NUX MG-300 using one of the 3 firmware-verified CCs:
-   * - 'master_cc64' -> CC 0x40 (64) Global Master Volume (0..100)
-   * - 'patch_cc74' -> CC 0x4A (74) Per-Preset Patch Level P.LVL (0..100)
-   * - 'expression_cc61' -> CC 0x3D (61) Expression Pedal (0..100)
+   * Adjusts Master Volume on the NUX MG-300 using CC 0x40 (64, range 0..100).
+   * Rejects any target other than 'master_cc64'.
    */
   public async setVolume(
     volume: number,
-    target: VolumeTarget = this.volumeTarget,
+    target: VolumeTarget = 'master_cc64',
     channel = this.defaultChannel,
   ): Promise<SentCommandRecord> {
+    if (target !== 'master_cc64') {
+      throw new MidiServiceError(
+        'INVALID_MIDI_VALUE',
+        `Alvo de volume não permitido ("${String(target)}"): apenas Volume Master é aceito.`,
+      );
+    }
     this.validateChannel(channel);
     this.validateIntegerRange(volume, 0, 100, 'MG-300 volume');
     this.ensureConnected();
 
-    const ccNumber = VOLUME_TARGET_TO_CC[target];
-    if (ccNumber === undefined) {
-      throw new MidiServiceError(
-        'INVALID_MIDI_VALUE',
-        `Alvo de volume inválido: "${String(target)}".`,
-      );
-    }
-
-    this.volumeTarget = target;
+    const ccNumber = VOLUME_TARGET_TO_CC.master_cc64;
+    this.volumeTarget = 'master_cc64';
     const bytes = [0xb0 | channel, ccNumber, volume];
 
     const record: SentCommandRecord = {
       commandId: this.nextCommandId('vol'),
       type: 'volume_change',
       volume,
-      volumeTarget: target,
+      volumeTarget: 'master_cc64',
       midiBytes: bytes,
       sentAt: new Date().toISOString(),
       confirmedByDevice: false,
@@ -463,11 +514,13 @@ export class MidiService {
       this.emitStateChange();
       return this.lastSentCommand ? { ...this.lastSentCommand } : record;
     } catch (err) {
-      this.lastSentCommand = previousLastSent;
-      this.syncStatus = previousSyncStatus;
       const midiError = this.normalizeError(err, 'TRANSMISSION_FAILED');
-      this.lastError = midiError.toErrorRecord();
-      this.emitStateChange();
+      if (this.connectionState === 'connected') {
+        this.lastSentCommand = previousLastSent;
+        this.syncStatus = previousSyncStatus;
+        this.lastError = midiError.toErrorRecord();
+        this.emitStateChange();
+      }
       throw midiError;
     }
   }
@@ -485,9 +538,96 @@ export class MidiService {
       await this.adapter.sendBytes([...bytes]);
     } catch (err) {
       const midiError = this.normalizeError(err, 'TRANSMISSION_FAILED');
-      this.lastError = midiError.toErrorRecord();
-      this.emitStateChange();
+      if (this.connectionState === 'connected') {
+        this.lastError = midiError.toErrorRecord();
+        this.emitStateChange();
+      }
       throw midiError;
+    }
+  }
+
+  public onRawSysEx(listener: (bytes: number[]) => void): () => void {
+    this.rawSysExListeners.add(listener);
+    return () => {
+      this.rawSysExListeners.delete(listener);
+    };
+  }
+
+  /**
+   * EXPERIMENTAL: sends a CC from the allowlist (CC 1..59, 71, 74; CC 70 remains blocked).
+   * These only change the pedal's RAM; nothing is written to Flash.
+   */
+  public async sendExperimentalControlChange(
+    cc: number,
+    value: number,
+    channel = this.defaultChannel,
+  ): Promise<void> {
+    this.ensureExperimentalEnabled();
+    this.validateChannel(channel);
+    if (!MG300_EXPERIMENTAL_CC_ALLOWLIST.has(cc)) {
+      throw new MidiServiceError(
+        'UNVALIDATED_MESSAGE_BLOCKED',
+        `CC ${cc} fora da allowlist experimental (CC 1..59, 71, 74).`,
+      );
+    }
+    const maxVal = getExperimentalCcMaxValue(cc);
+    this.validateIntegerRange(value, 0, maxVal, `Experimental CC ${cc} value`);
+    if (!isValidMg300ExperimentalCcValue(cc, value)) {
+      throw new MidiServiceError(
+        'INVALID_MIDI_VALUE',
+        `Modelo/valor inválido (${value}) para CC ${cc} na NUX MG-300.`,
+      );
+    }
+    this.ensureConnected();
+    try {
+      await this.adapter.sendBytes([0xb0 | channel, cc, value]);
+    } catch (err) {
+      const midiError = this.normalizeError(err, 'TRANSMISSION_FAILED');
+      if (this.connectionState === 'connected') {
+        this.lastError = midiError.toErrorRecord();
+        this.emitStateChange();
+      }
+      throw midiError;
+    }
+  }
+
+  /** Sends one well-formed 0x0E preset write targeting exclusively a User slot (0..35). */
+  public async sendExperimentalPresetWrite(frame: number[]): Promise<void> {
+    this.ensureExperimentalEnabled();
+    if (!isExperimentalPresetWriteSysEx(frame)) {
+      this.logger.warn('midi-service', 'Blocked invalid 0x0E preset write frame', {
+        length: frame.length,
+        slotByte: frame[8],
+        hex: formatHexBytes(frame, 16),
+      });
+      throw new MidiServiceError(
+        'UNVALIDATED_MESSAGE_BLOCKED',
+        'A gravação só é permitida em slots de Usuário (1A a 9D). Slots de Fábrica são protegidos.',
+      );
+    }
+    this.ensureConnected();
+    try {
+      await this.adapter.sendBytes([...frame]);
+    } catch (err) {
+      const midiError = this.normalizeError(err, 'TRANSMISSION_FAILED');
+      this.logger.error('midi-service', 'Failed to send experimental preset write', {
+        code: midiError.code,
+        message: midiError.message,
+      });
+      if (this.connectionState === 'connected') {
+        this.lastError = midiError.toErrorRecord();
+        this.emitStateChange();
+      }
+      throw midiError;
+    }
+  }
+
+  private ensureExperimentalEnabled(): void {
+    if (!this.experimentalEdit) {
+      throw new MidiServiceError(
+        'UNVALIDATED_MESSAGE_BLOCKED',
+        'A edição experimental está desativada neste servidor.',
+      );
     }
   }
 
@@ -509,6 +649,9 @@ export class MidiService {
 
   private handleIncomingMessage(bytes: number[]): void {
     if (bytes.length >= 8 && bytes[0] === 0xf0 && bytes[bytes.length - 1] === 0xf7) {
+      for (const listener of this.rawSysExListeners) {
+        listener(bytes);
+      }
       this.handleIncomingSysEx(bytes);
       return;
     }
@@ -560,24 +703,26 @@ export class MidiService {
       return;
     }
 
-    const matchedVolumeTarget = CC_TO_VOLUME_TARGET[cc];
-    if (matchedVolumeTarget && value >= 0 && value <= 100) {
+    if (cc === MG300_MIDI_CC.MASTER_VOLUME && value >= 0 && value <= 100) {
       this.confirmedState = {
         ...this.confirmedState,
         volume: value,
-        volumeTarget: matchedVolumeTarget,
+        volumeTarget: 'master_cc64',
         confirmedAt: now,
       };
 
-      if (
-        this.lastSentCommand &&
-        this.lastSentCommand.volume === value &&
-        this.lastSentCommand.volumeTarget === matchedVolumeTarget
-      ) {
-        this.lastSentCommand = {
-          ...this.lastSentCommand,
-          confirmedByDevice: true,
-        };
+      if (this.lastSentCommand?.type === 'volume_change') {
+        if (
+          this.lastSentCommand.volume === value &&
+          this.lastSentCommand.volumeTarget === 'master_cc64'
+        ) {
+          this.lastSentCommand = {
+            ...this.lastSentCommand,
+            confirmedByDevice: true,
+          };
+        } else if (!this.lastSentCommand.confirmedByDevice) {
+          this.lastSentCommand = null;
+        }
       }
 
       const hasPendingUnconfirmedCommand =
@@ -603,6 +748,9 @@ export class MidiService {
         .filter((s) => s.length > 0)
         .join(' · ');
       this.deviceFirmwareVersion = versionLabel.length > 0 ? versionLabel : null;
+      this.logger.info('midi-service', 'Device identity confirmed via SysEx', {
+        deviceFirmwareVersion: this.deviceFirmwareVersion,
+      });
       this.emitStateChange();
       return;
     }
@@ -641,15 +789,22 @@ export class MidiService {
             ...this.lastSentCommand,
             confirmedByDevice: true,
           };
-        } else if (
-          this.lastSentCommand.type === 'volume_change' &&
-          this.lastSentCommand.volumeTarget === 'master_cc64' &&
-          this.lastSentCommand.volume === parsed.masterVolume
-        ) {
-          this.lastSentCommand = {
-            ...this.lastSentCommand,
-            confirmedByDevice: true,
-          };
+        } else if (this.lastSentCommand.type === 'volume_change') {
+          if (
+            this.lastSentCommand.volumeTarget === 'master_cc64' &&
+            this.lastSentCommand.volume === parsed.masterVolume
+          ) {
+            this.lastSentCommand = {
+              ...this.lastSentCommand,
+              confirmedByDevice: true,
+            };
+          } else if (
+            !this.lastSentCommand.confirmedByDevice &&
+            validVolume !== null &&
+            validVolume !== undefined
+          ) {
+            this.lastSentCommand = null;
+          }
         }
       }
 
@@ -670,35 +825,15 @@ export class MidiService {
           struct102: parsed.struct102,
         });
       }
-
-      const patchLevel = parsed.struct102[101];
-      if (
-        patchLevel !== undefined &&
-        patchLevel >= 0 &&
-        patchLevel <= 100 &&
-        this.lastSentCommand?.type === 'volume_change' &&
-        this.lastSentCommand.volumeTarget === 'patch_cc74' &&
-        this.lastSentCommand.volume === patchLevel &&
-        this.confirmedState.slotIndex === parsed.slotIndex
-      ) {
-        this.confirmedState = {
-          ...this.confirmedState,
-          volume: patchLevel,
-          volumeTarget: 'patch_cc74',
-          confirmedAt: now,
-        };
-        this.lastSentCommand = {
-          ...this.lastSentCommand,
-          confirmedByDevice: true,
-        };
-        this.syncStatus = 'confirmed';
-        this.emitStateChange();
-      }
     }
   }
 
   private handleUnexpectedDisconnect(reason?: string): void {
     const targetPortToReconnect = this.lastTargetPortName ?? this.connectedPortName;
+    this.logger.warn('midi-service', 'Unexpected MIDI disconnect', {
+      reason,
+      targetPortToReconnect,
+    });
     this.connectedPortName = null;
     this.syncStatus = 'unknown';
     this.confirmedState = createEmptyConfirmedState();
@@ -706,7 +841,7 @@ export class MidiService {
     this.deviceFirmwareVersion = null;
     this.lastError = {
       code: 'DISCONNECTED',
-      message: reason ?? 'Conexão USB-MIDI com a pedaleira foi perdida.',
+      message: reason ?? 'A conexão USB com a pedaleira foi perdida.',
       timestamp: new Date().toISOString(),
     };
 
@@ -737,6 +872,9 @@ export class MidiService {
   private async tryReconnectOnce(portName: string): Promise<void> {
     if (this.connectionState !== 'reconnecting') {
       this.stopReconnectLoop();
+      return;
+    }
+    if (this.connectInFlight) {
       return;
     }
 
@@ -782,7 +920,7 @@ export class MidiService {
     if (!this.adapter.isConnected() || this.connectionState !== 'connected') {
       throw new MidiServiceError(
         'DISCONNECTED',
-        'Operação MIDI recusada: nenhum dispositivo MIDI está conectado.',
+        'A pedaleira não está conectada. Conecte a NUX MG-300 e tente novamente.',
       );
     }
   }

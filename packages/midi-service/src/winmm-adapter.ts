@@ -5,12 +5,18 @@ import os from 'node:os';
 import path from 'node:path';
 import { createInterface, type Interface } from 'node:readline';
 import { type MidiPortInfo } from '@quicktone/shared';
+import {
+  formatHexBytes,
+  getSharedMidiDiagnosticsLogger,
+  type MidiDiagnosticsLogger,
+} from './diagnostics-logger.js';
 import { type IMidiAdapter, isMg300PortName, MidiServiceError } from './types.js';
 
 export interface WinMmMidiAdapterOptions {
   powershellExecutable?: string;
   allowSystemSynth?: boolean;
   commandTimeoutMs?: number;
+  logger?: MidiDiagnosticsLogger;
 }
 
 const SYSTEM_SYNTH_NAME = 'microsoft gs wavetable synth';
@@ -60,7 +66,7 @@ namespace QuickToneWinMm {
     public uint dwSupport;
   }
 
-  [StructLayout(LayoutKind.Sequential)]
+  [StructLayout(LayoutKind.Sequential, Pack = 1)]
   public struct MIDIHDR {
     public IntPtr lpData;
     public uint dwBufferLength;
@@ -252,6 +258,11 @@ namespace QuickToneWinMm {
           _rxQueue.Enqueue(new RxLongEvent { Bytes = data, HdrPtr = dwParam1 });
           _rxEvent.Set();
         }
+      } else if (wMsg == NativeMethods.MIM_LONGERROR) {
+        if (dwParam1 != IntPtr.Zero) {
+          _rxQueue.Enqueue(new RxLongEvent { Bytes = new byte[0], HdrPtr = dwParam1 });
+          _rxEvent.Set();
+        }
       } else if (wMsg == NativeMethods.MIM_CLOSE) {
         _rxQueue.Enqueue(new RxDisconnectEvent { Reason = "MIM_CLOSE" });
         _rxEvent.Set();
@@ -284,6 +295,10 @@ namespace QuickToneWinMm {
                   sysexAcc.Clear();
                   sysexAcc.Add(b);
                 } else if (sysexAcc.Count > 0) {
+                  if (sysexAcc.Count >= 65536) {
+                    sysexAcc.Clear();
+                    continue;
+                  }
                   sysexAcc.Add(b);
                   if (b == 0xF7) {
                     WriteLineJson("{\\"event\\":\\"midi_in\\",\\"bytes\\":" + BytesToJsonArray(sysexAcc) + "}");
@@ -360,6 +375,9 @@ namespace QuickToneWinMm {
       }
 
       bool inOpened = false;
+      int inBuffersPrepared = 0;
+      uint inPrepError = 0;
+      uint inStartRes = 0;
       _callbackDelegate = OnMidiInCallback;
       if (inId >= 0) {
         uint resIn = NativeMethods.midiInOpen(out _hIn, (uint)inId, _callbackDelegate, IntPtr.Zero, NativeMethods.CALLBACK_FUNCTION);
@@ -380,23 +398,29 @@ namespace QuickToneWinMm {
             };
             IntPtr hdrPtr = Marshal.AllocHGlobal((int)hdrSize);
             Marshal.StructureToPtr(hdr, hdrPtr, false);
-            if (NativeMethods.midiInPrepareHeader(_hIn, hdrPtr, hdrSize) == 0 &&
-                NativeMethods.midiInAddBuffer(_hIn, hdrPtr, hdrSize) == 0) {
+            uint rPrep = NativeMethods.midiInPrepareHeader(_hIn, hdrPtr, hdrSize);
+            uint rAdd = rPrep == 0 ? NativeMethods.midiInAddBuffer(_hIn, hdrPtr, hdrSize) : rPrep;
+            if (rPrep == 0 && rAdd == 0) {
               _inHeaders.Add(hdrPtr);
               _inBuffers.Add(bufPtr);
+              inBuffersPrepared++;
             } else {
+              inPrepError = rPrep != 0 ? rPrep : rAdd;
+              if (rPrep == 0) {
+                NativeMethods.midiInUnprepareHeader(_hIn, hdrPtr, hdrSize);
+              }
               Marshal.FreeHGlobal(hdrPtr);
               Marshal.FreeHGlobal(bufPtr);
             }
           }
 
-          NativeMethods.midiInStart(_hIn);
+          inStartRes = NativeMethods.midiInStart(_hIn);
           inOpened = true;
         } else {
           NativeMethods.midiOutClose(_hOut);
           _hOut = IntPtr.Zero;
           string inErrCode = resIn == 4 ? "PORT_BUSY" : "DEVICE_NOT_FOUND";
-          WriteLineJson("{\\"event\\":\\"open_error\\",\\"code\\":\\"" + inErrCode + "\\",\\"mmresult\\":" + resIn + "}");
+          WriteLineJson("{\\"event\\":\\"open_error\\",\\"code\\":\\"" + inErrCode + "\\",\\"op\\":\\"midiInOpen\\",\\"mmresult\\":" + resIn + "}");
           return;
         }
       }
@@ -410,7 +434,10 @@ namespace QuickToneWinMm {
         "{\\"event\\":\\"opened\\",\\"portName\\":\\"" + EscapeJson(reportedName) +
         "\\",\\"outPortName\\":\\"" + EscapeJson(actualOutRawName ?? "") +
         "\\",\\"inPortName\\":\\"" + EscapeJson(actualInRawName ?? "") +
-        "\\",\\"inOpened\\":" + (inOpened ? "true" : "false") + "}"
+        "\\",\\"inOpened\\":" + (inOpened ? "true" : "false") +
+        ",\\"inBuffers\\":" + inBuffersPrepared +
+        ",\\"inPrepError\\":" + inPrepError +
+        ",\\"inStartRes\\":" + inStartRes + "}"
       );
 
       string line;
@@ -450,12 +477,15 @@ namespace QuickToneWinMm {
           msg[i] = (byte)(parsedByte & 0xFF);
         }
         if (!parseOk) {
-          WriteLineJson("{\\"event\\":\\"ack\\",\\"id\\":" + reqId + ",\\"ok\\":false,\\"mmresult\\":11}");
+          WriteLineJson("{\\"event\\":\\"ack\\",\\"id\\":" + reqId + ",\\"ok\\":false,\\"op\\":\\"parse\\",\\"mmresult\\":11}");
           continue;
         }
 
         uint mmResult;
+        string op = "midiOutShortMsg";
+        bool mhdrDoneTimeout = false;
         if (msg.Length > 3 || msg[0] == 0xF0) {
+          op = "midiOutPrepareHeader";
           uint hdrSize = (uint)Marshal.SizeOf(typeof(MIDIHDR));
           IntPtr bufPtr = Marshal.AllocHGlobal(msg.Length);
           Marshal.Copy(msg, 0, bufPtr, msg.Length);
@@ -474,6 +504,7 @@ namespace QuickToneWinMm {
           Marshal.StructureToPtr(hdr, hdrPtr, false);
           mmResult = NativeMethods.midiOutPrepareHeader(_hOut, hdrPtr, hdrSize);
           if (mmResult == 0) {
+            op = "midiOutLongMsg";
             mmResult = NativeMethods.midiOutLongMsg(_hOut, hdrPtr, hdrSize);
             if (mmResult == 0) {
               var startWait = DateTime.UtcNow;
@@ -484,6 +515,7 @@ namespace QuickToneWinMm {
               }
               MIDIHDR finalHdr = (MIDIHDR)Marshal.PtrToStructure(hdrPtr, typeof(MIDIHDR));
               if ((finalHdr.dwFlags & NativeMethods.MHDR_DONE) == 0) {
+                mhdrDoneTimeout = true;
                 NativeMethods.midiOutReset(_hOut);
               }
             }
@@ -500,9 +532,9 @@ namespace QuickToneWinMm {
         }
 
         if (mmResult == 0) {
-          WriteLineJson("{\\"event\\":\\"ack\\",\\"id\\":" + reqId + ",\\"ok\\":true}");
+          WriteLineJson("{\\"event\\":\\"ack\\",\\"id\\":" + reqId + ",\\"ok\\":true,\\"op\\":\\"" + op + "\\",\\"mhdrDoneTimeout\\":" + (mhdrDoneTimeout ? "true" : "false") + "}");
         } else {
-          WriteLineJson("{\\"event\\":\\"ack\\",\\"id\\":" + reqId + ",\\"ok\\":false,\\"mmresult\\":" + mmResult + "}");
+          WriteLineJson("{\\"event\\":\\"ack\\",\\"id\\":" + reqId + ",\\"ok\\":false,\\"op\\":\\"" + op + "\\",\\"mmresult\\":" + mmResult + "}");
         }
       }
 
@@ -547,17 +579,20 @@ namespace QuickToneWinMm {
 
 let cachedBridgeDir: string | null = null;
 let cachedCsPath: string | null = null;
+let cachedDllPath: string | null = null;
 let cachedListScriptPath: string | null = null;
 let cachedWorkerScriptPath: string | null = null;
 
 function ensureWinMmBridgeFiles(): {
   csPath: string;
+  dllPath: string;
   listScriptPath: string;
   workerScriptPath: string;
 } {
   if (
     cachedBridgeDir &&
     cachedCsPath &&
+    cachedDllPath &&
     cachedListScriptPath &&
     cachedWorkerScriptPath &&
     fs.existsSync(cachedCsPath) &&
@@ -566,6 +601,7 @@ function ensureWinMmBridgeFiles(): {
   ) {
     return {
       csPath: cachedCsPath,
+      dllPath: cachedDllPath,
       listScriptPath: cachedListScriptPath,
       workerScriptPath: cachedWorkerScriptPath,
     };
@@ -576,6 +612,7 @@ function ensureWinMmBridgeFiles(): {
   fs.mkdirSync(bridgeDir, { recursive: true });
 
   const csPath = path.join(bridgeDir, 'bridge.cs');
+  const dllPath = path.join(bridgeDir, 'bridge.dll');
   const listScriptPath = path.join(bridgeDir, 'list-ports.ps1');
   const workerScriptPath = path.join(bridgeDir, 'worker.ps1');
 
@@ -584,10 +621,28 @@ function ensureWinMmBridgeFiles(): {
   }
 
   const csLiteral = csPath.replace(/'/g, "''");
+  const dllLiteral = dllPath.replace(/'/g, "''");
+  const loadAssemblySnippet = [
+    `if (Test-Path -LiteralPath '${dllLiteral}') {`,
+    `  Add-Type -Path '${dllLiteral}'`,
+    `} else {`,
+    `  try {`,
+    `    Add-Type -Path '${csLiteral}' -OutputAssembly '${dllLiteral}'`,
+    `    Add-Type -Path '${dllLiteral}'`,
+    `  } catch {`,
+    `    if (Test-Path -LiteralPath '${dllLiteral}') {`,
+    `      Add-Type -Path '${dllLiteral}'`,
+    `    } else {`,
+    `      Add-Type -Path '${csLiteral}'`,
+    `    }`,
+    `  }`,
+    `}`,
+  ].join('\r\n');
+
   const listScript = [
     "$ErrorActionPreference = 'Stop'",
     '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
-    `Add-Type -Path '${csLiteral}'`,
+    loadAssemblySnippet,
     '[QuickToneWinMm.Bridge]::ListPortsJson()',
   ].join('\r\n');
 
@@ -595,33 +650,48 @@ function ensureWinMmBridgeFiles(): {
     "$ErrorActionPreference = 'Stop'",
     '[Console]::InputEncoding = [System.Text.Encoding]::UTF8',
     '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
-    `Add-Type -Path '${csLiteral}'`,
+    loadAssemblySnippet,
     '[QuickToneWinMm.Bridge]::RunWorker($env:QUICKTONE_MIDI_TARGET)',
   ].join('\r\n');
 
-  if (!fs.existsSync(listScriptPath)) {
-    fs.writeFileSync(listScriptPath, listScript, 'utf8');
-  }
-  if (!fs.existsSync(workerScriptPath)) {
-    fs.writeFileSync(workerScriptPath, workerScript, 'utf8');
-  }
+  fs.writeFileSync(listScriptPath, listScript, 'utf8');
+  fs.writeFileSync(workerScriptPath, workerScript, 'utf8');
 
   cachedBridgeDir = bridgeDir;
   cachedCsPath = csPath;
+  cachedDllPath = dllPath;
   cachedListScriptPath = listScriptPath;
   cachedWorkerScriptPath = workerScriptPath;
 
-  return { csPath, listScriptPath, workerScriptPath };
+  return { csPath, dllPath, listScriptPath, workerScriptPath };
 }
+
+export class WinMmSendAckError extends Error {
+  public readonly mmresult: number | null;
+  public readonly op: string;
+
+  constructor(mmresult: number | null, op: string) {
+    super(`WinMM send failed (op=${op}, mmresult=${String(mmresult)})`);
+    this.name = 'WinMmSendAckError';
+    this.mmresult = mmresult;
+    this.op = op;
+  }
+}
+
+const USER_FRIENDLY_SEND_ERROR =
+  'Não foi possível enviar o comando para a pedaleira. Verifique o cabo USB ou reconecte a NUX MG-300.';
 
 export class WinMmMidiAdapter implements IMidiAdapter {
   private readonly powershellExecutable: string;
   private readonly allowSystemSynth: boolean;
   private readonly commandTimeoutMs: number;
+  private readonly logger: MidiDiagnosticsLogger;
   private worker: ChildProcessWithoutNullStreams | null = null;
   private workerRl: Interface | null = null;
   private connectedPortName: string | null = null;
   private closingIntentionally = false;
+  private openInFlight: Promise<{ portName: string }> | null = null;
+  private recoveryInFlight: Promise<boolean> | null = null;
   private nextRequestId = 1;
   private readonly pendingAcks = new Map<
     number,
@@ -637,7 +707,8 @@ export class WinMmMidiAdapter implements IMidiAdapter {
   constructor(options: WinMmMidiAdapterOptions = {}) {
     this.powershellExecutable = options.powershellExecutable ?? 'powershell.exe';
     this.allowSystemSynth = options.allowSystemSynth ?? false;
-    this.commandTimeoutMs = options.commandTimeoutMs ?? 8000;
+    this.commandTimeoutMs = options.commandTimeoutMs ?? 12000;
+    this.logger = options.logger ?? getSharedMidiDiagnosticsLogger();
   }
 
   public async listPorts(): Promise<MidiPortInfo[]> {
@@ -694,6 +765,19 @@ export class WinMmMidiAdapter implements IMidiAdapter {
   }
 
   public async openPort(portName: string): Promise<{ portName: string }> {
+    while (this.openInFlight) {
+      await this.openInFlight.catch(() => {});
+    }
+    const promise = this.performOpenPort(portName).finally(() => {
+      if (this.openInFlight === promise) {
+        this.openInFlight = null;
+      }
+    });
+    this.openInFlight = promise;
+    return promise;
+  }
+
+  private async performOpenPort(portName: string): Promise<{ portName: string }> {
     const trimmed = portName.trim();
     if (!this.allowSystemSynth && trimmed.toLowerCase() === SYSTEM_SYNTH_NAME) {
       throw new MidiServiceError(
@@ -711,6 +795,8 @@ export class WinMmMidiAdapter implements IMidiAdapter {
       this.closingIntentionally = false;
       const { workerScriptPath } = ensureWinMmBridgeFiles();
 
+      this.logger.info('winmm', 'Opening MIDI port via worker', { targetPort: trimmed });
+
       const child = spawn(
         this.powershellExecutable,
         ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', workerScriptPath],
@@ -725,14 +811,26 @@ export class WinMmMidiAdapter implements IMidiAdapter {
       );
       this.worker = child;
 
+      child.stderr.on('data', (chunk: Buffer | string) => {
+        const text = chunk.toString().trim();
+        if (text.length > 0) {
+          this.logger.warn('winmm.stderr', text, { targetPort: trimmed, pid: child.pid });
+        }
+      });
+
       const openTimer = setTimeout(() => {
         if (!openedResolved) {
           openedResolved = true;
+          this.logger.error('winmm', 'Timeout opening MIDI port (MidiSrv/driver stalled)', {
+            targetPort: trimmed,
+            timeoutMs: this.commandTimeoutMs,
+            pid: child.pid,
+          });
           this.cleanupWorker();
           reject(
             new MidiServiceError(
               'PORT_BUSY',
-              `Timeout ao abrir porta MIDI "${trimmed}" via WinMM (driver MidiSrv ocupado; reconecte o cabo USB da pedaleira se persistir).`,
+              'A pedaleira demorou para responder ao conectar. Desconecte e reconecte o cabo USB e tente novamente.',
             ),
           );
         }
@@ -763,7 +861,7 @@ export class WinMmMidiAdapter implements IMidiAdapter {
             reject(
               new MidiServiceError(
                 'DISCONNECTED',
-                `Abertura da porta MIDI "${trimmed}" cancelada durante fechamento.`,
+                'A conexão com a pedaleira foi cancelada.',
               ),
             );
             return;
@@ -773,21 +871,49 @@ export class WinMmMidiAdapter implements IMidiAdapter {
               ? payload.portName
               : normalizeMidiBasePortName(trimmed);
           this.connectedPortName = actualName;
+          this.logger.info('winmm', 'MIDI port opened', {
+            portName: actualName,
+            outPortName: payload.outPortName,
+            inPortName: payload.inPortName,
+            inOpened: payload.inOpened,
+            inBuffers: payload.inBuffers,
+            inPrepError: payload.inPrepError,
+            inStartRes: payload.inStartRes,
+            pid: child.pid,
+          });
+          if (payload.inOpened === true && payload.inBuffers === 0) {
+            this.logger.warn('winmm', 'MIDI IN opened with zero SysEx buffers prepared', {
+              inPortName: payload.inPortName,
+              inPrepError: payload.inPrepError,
+            });
+          }
           resolve({ portName: actualName });
         } else if (event === 'open_error' && !openedResolved) {
           openedResolved = true;
           clearTimeout(openTimer);
           const code = payload.code === 'PORT_BUSY' ? 'PORT_BUSY' : 'DEVICE_NOT_FOUND';
+          this.logger.error('winmm', 'Failed to open MIDI port', {
+            targetPort: trimmed,
+            code,
+            op: payload.op,
+            mmresult: payload.mmresult,
+          });
           const msg =
             code === 'PORT_BUSY'
-              ? `A porta MIDI "${trimmed}" está ocupada por outro processo (WinMM MMSYSERR_ALLOCATED).`
-              : `Dispositivo MIDI "${trimmed}" não encontrado no Windows WinMM.`;
+              ? 'A pedaleira está em uso por outro programa (como o QuickTone ou uma DAW). Feche o outro programa e tente conectar novamente.'
+              : 'Pedaleira não encontrada. Verifique se a NUX MG-300 está ligada e conectada pelo cabo USB.';
           this.cleanupWorker();
           reject(new MidiServiceError(code, msg));
         } else if (event === 'midi_in' && Array.isArray(payload.bytes)) {
           const bytes = (payload.bytes as unknown[]).filter(
             (b): b is number => typeof b === 'number',
           );
+          if (bytes.length > 0 && bytes[0] === 0xf0) {
+            this.logger.debug('winmm.rx', 'SysEx received', {
+              length: bytes.length,
+              hex: formatHexBytes(bytes, 16),
+            });
+          }
           for (const listener of this.incomingListeners) {
             listener(bytes);
           }
@@ -797,24 +923,40 @@ export class WinMmMidiAdapter implements IMidiAdapter {
             clearTimeout(pending.timer);
             this.pendingAcks.delete(payload.id);
             if (payload.ok === true) {
+              if (payload.mhdrDoneTimeout === true) {
+                this.logger.warn('winmm.tx', 'SysEx MHDR_DONE timeout triggered midiOutReset', {
+                  reqId: payload.id,
+                  op: payload.op,
+                });
+              }
               pending.resolve();
             } else {
-              pending.reject(
-                new MidiServiceError(
-                  'TRANSMISSION_FAILED',
-                  `Falha WinMM ao enviar MIDI (mmresult=${String(payload.mmresult)}).`,
-                ),
-              );
+              const mmresult = typeof payload.mmresult === 'number' ? payload.mmresult : null;
+              const op = typeof payload.op === 'string' ? payload.op : 'unknown';
+              this.logger.error('winmm.tx', 'WinMM send returned error', {
+                reqId: payload.id,
+                op,
+                mmresult,
+                portName: this.connectedPortName,
+              });
+              pending.reject(new WinMmSendAckError(mmresult, op));
             }
           }
         } else if (event === 'disconnect') {
+          const reason =
+            typeof payload.reason === 'string' ? payload.reason : 'WinMM device closed';
+          this.logger.warn('winmm', 'MIDI device disconnected event from worker', { reason });
           this.handleUnexpectedDisconnect(
-            typeof payload.reason === 'string' ? payload.reason : 'WinMM device closed',
+            'A conexão USB com a pedaleira foi interrompida.',
           );
         }
       });
 
       child.on('error', (err) => {
+        this.logger.error('winmm', 'Worker process error', {
+          targetPort: trimmed,
+          error: err.message,
+        });
         if (!openedResolved) {
           openedResolved = true;
           clearTimeout(openTimer);
@@ -822,15 +964,22 @@ export class WinMmMidiAdapter implements IMidiAdapter {
           reject(
             new MidiServiceError(
               'DEVICE_NOT_FOUND',
-              `Erro ao iniciar bridge WinMM: ${err.message}`,
+              'Não foi possível iniciar a comunicação com a pedaleira. Tente novamente.',
             ),
           );
         } else if (!this.closingIntentionally) {
-          this.handleUnexpectedDisconnect(err.message);
+          this.handleUnexpectedDisconnect('A comunicação com a pedaleira foi interrompida.');
         }
       });
 
-      child.on('exit', () => {
+      child.on('exit', (exitCode, signal) => {
+        this.logger.info('winmm', 'Worker process exited', {
+          targetPort: trimmed,
+          exitCode,
+          signal,
+          closingIntentionally: this.closingIntentionally,
+          openedResolved,
+        });
         if (!openedResolved) {
           openedResolved = true;
           clearTimeout(openTimer);
@@ -838,11 +987,11 @@ export class WinMmMidiAdapter implements IMidiAdapter {
           reject(
             new MidiServiceError(
               'DEVICE_NOT_FOUND',
-              `Processo WinMM encerrou antes de abrir a porta "${trimmed}".`,
+              'Não foi possível abrir a conexão com a pedaleira. Verifique o cabo USB e tente novamente.',
             ),
           );
         } else if (!this.closingIntentionally && this.connectedPortName !== null) {
-          this.handleUnexpectedDisconnect('WinMM worker process exited unexpectedly');
+          this.handleUnexpectedDisconnect('A conexão com a pedaleira foi perdida inesperadamente.');
         }
       });
     });
@@ -880,7 +1029,10 @@ export class WinMmMidiAdapter implements IMidiAdapter {
   }
 
   public isConnected(): boolean {
-    return this.connectedPortName !== null && this.worker !== null;
+    return (
+      this.recoveryInFlight !== null ||
+      (this.connectedPortName !== null && this.worker !== null)
+    );
   }
 
   public getConnectedPortName(): string | null {
@@ -888,21 +1040,136 @@ export class WinMmMidiAdapter implements IMidiAdapter {
   }
 
   public async sendBytes(bytes: number[]): Promise<void> {
+    if (this.recoveryInFlight) {
+      await this.recoveryInFlight.catch(() => false);
+    }
+
     if (!this.worker || !this.connectedPortName) {
       throw new MidiServiceError(
         'DISCONNECTED',
-        'Não é possível enviar bytes MIDI: porta WinMM desconectada.',
+        'A pedaleira não está conectada no momento. Conecte a NUX MG-300 e tente novamente.',
       );
     }
 
+    const portAtSend = this.connectedPortName;
+    try {
+      await this.sendBytesOnce(bytes);
+    } catch (err) {
+      if (err instanceof WinMmSendAckError && err.mmresult === 1) {
+        this.logger.warn(
+          'winmm.recovery',
+          'Detected WinMM send stall (mmresult=1 / MMSYSERR_ERROR); attempting single clean reconnect',
+          {
+            portName: portAtSend,
+            op: err.op,
+            bytesHex: formatHexBytes(bytes, 16),
+          },
+        );
+        const recovered = await this.recoverFromSendStall(portAtSend);
+        if (recovered) {
+          try {
+            await this.sendBytesOnce(bytes);
+            this.logger.info('winmm.recovery', 'Resend succeeded after clean WinMM reconnect', {
+              portName: portAtSend,
+              bytesHex: formatHexBytes(bytes, 16),
+            });
+            return;
+          } catch (retryErr) {
+            this.logger.error('winmm.recovery', 'Resend failed even after clean WinMM reconnect', {
+              portName: portAtSend,
+              error: retryErr instanceof Error ? retryErr.message : String(retryErr),
+              bytesHex: formatHexBytes(bytes, 16),
+            });
+          }
+        }
+        await this.forceDisconnectAfterStall(
+          'A pedaleira parou de responder. Desconecte e reconecte o cabo USB para restabelecer a comunicação.',
+        );
+        throw new MidiServiceError('TRANSMISSION_FAILED', USER_FRIENDLY_SEND_ERROR);
+      }
+
+      if (err instanceof WinMmSendAckError) {
+        this.logger.error('winmm.tx', 'Send failed with non-stall WinMM error', {
+          portName: portAtSend,
+          op: err.op,
+          mmresult: err.mmresult,
+          bytesHex: formatHexBytes(bytes, 16),
+        });
+        throw new MidiServiceError('TRANSMISSION_FAILED', USER_FRIENDLY_SEND_ERROR);
+      }
+
+      throw err;
+    }
+  }
+
+  private async recoverFromSendStall(portName: string): Promise<boolean> {
+    if (this.recoveryInFlight) {
+      return this.recoveryInFlight;
+    }
+
+    const promise = (async (): Promise<boolean> => {
+      try {
+        await this.closePort();
+        await this.openPort(portName);
+        this.logger.info('winmm.recovery', 'Clean WinMM reconnect succeeded', { portName });
+        return true;
+      } catch (err) {
+        this.logger.error('winmm.recovery', 'Clean WinMM reconnect failed', {
+          portName,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return false;
+      }
+    })().finally(() => {
+      if (this.recoveryInFlight === promise) {
+        this.recoveryInFlight = null;
+      }
+    });
+
+    this.recoveryInFlight = promise;
+    return promise;
+  }
+
+  private async forceDisconnectAfterStall(reason: string): Promise<void> {
+    await this.closePort();
+    this.closingIntentionally = false;
+    for (const listener of this.disconnectListeners) {
+      listener(reason);
+    }
+  }
+
+  private sendBytesOnce(bytes: number[]): Promise<void> {
+    if (!this.worker || !this.connectedPortName) {
+      return Promise.reject(
+        new MidiServiceError(
+          'DISCONNECTED',
+          'A pedaleira não está conectada no momento. Conecte a NUX MG-300 e tente novamente.',
+        ),
+      );
+    }
+
+    if (bytes.length > 0 && bytes[0] === 0xf0) {
+      this.logger.debug('winmm.tx', 'Sending SysEx', {
+        length: bytes.length,
+        hex: formatHexBytes(bytes, 16),
+      });
+    }
+
     const requestId = this.nextRequestId++;
+    const activePort = this.connectedPortName;
     return new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingAcks.delete(requestId);
+        this.logger.error('winmm.tx', 'Timeout waiting for WinMM worker send ACK', {
+          reqId: requestId,
+          portName: activePort,
+          timeoutMs: this.commandTimeoutMs,
+          bytesHex: formatHexBytes(bytes, 16),
+        });
         reject(
           new MidiServiceError(
             'TRANSMISSION_FAILED',
-            `Timeout ao enviar bytes MIDI para "${this.connectedPortName}".`,
+            'A pedaleira demorou para confirmar o comando. Verifique o cabo USB ou tente novamente.',
           ),
         );
       }, this.commandTimeoutMs);
@@ -916,12 +1183,12 @@ export class WinMmMidiAdapter implements IMidiAdapter {
       } catch (err) {
         clearTimeout(timer);
         this.pendingAcks.delete(requestId);
-        reject(
-          new MidiServiceError(
-            'TRANSMISSION_FAILED',
-            err instanceof Error ? err.message : String(err),
-          ),
-        );
+        this.logger.error('winmm.tx', 'Failed to write command to WinMM worker stdin', {
+          reqId: requestId,
+          portName: activePort,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        reject(new MidiServiceError('TRANSMISSION_FAILED', USER_FRIENDLY_SEND_ERROR));
       }
     });
   }
@@ -988,8 +1255,12 @@ export class WinMmMidiAdapter implements IMidiAdapter {
         this.powershellExecutable,
         ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', listScriptPath],
         { timeout: this.commandTimeoutMs, windowsHide: true },
-        (err, stdout) => {
+        (err, stdout, stderr) => {
           if (err || !stdout) {
+            this.logger.warn('winmm.listPorts', 'Failed to list WinMM MIDI ports', {
+              error: err ? err.message : 'empty stdout',
+              stderr: stderr ? stderr.trim() : '',
+            });
             resolve({ in: [], out: [] });
             return;
           }
@@ -1004,8 +1275,16 @@ export class WinMmMidiAdapter implements IMidiAdapter {
             const outList = Array.isArray(parsed.out)
               ? parsed.out.filter((x): x is string => typeof x === 'string')
               : [];
+            this.logger.debug('winmm.listPorts', 'Enumerated WinMM ports', {
+              in: inList,
+              out: outList,
+            });
             resolve({ in: inList, out: outList });
-          } catch {
+          } catch (parseErr) {
+            this.logger.warn('winmm.listPorts', 'Invalid JSON from WinMM port listing', {
+              stdout: stdout.trim().slice(0, 200),
+              error: parseErr instanceof Error ? parseErr.message : String(parseErr),
+            });
             resolve({ in: [], out: [] });
           }
         },
