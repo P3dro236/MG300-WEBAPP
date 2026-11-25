@@ -5,8 +5,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   MG300_FILE_FORMAT,
   MG300_MIDI_CC,
+  MG300_USER_IR_CAB_ID,
   PresetSchema,
   PresetsResponseSchema,
+  encodeMg300PresetName,
 } from '@quicktone/shared';
 import {
   MG300_SPACE_CHAR_CODE,
@@ -15,6 +17,7 @@ import {
   buildNuxAllPresetsBinary,
   buildNuxPresetBinary,
   parseNuxPresetBuffer,
+  parseNuxPresetWithStruct102,
 } from '../index.js';
 
 describe('@quicktone/reader — QuickTone Binary Parser & Discovery Service', () => {
@@ -185,6 +188,57 @@ describe('@quicktone/reader — QuickTone Binary Parser & Discovery Service', ()
     expect(parsedV2.presets[0]?.slotIndex).toBe(7);
     expect(parsedV2.presets[0]?.displayBank).toBe('2D');
     expect(parsedV2.presets[0]?.patchVolume).toBe(82);
+
+    // Also test real QuickTone V4 subver=10 / payloadSize=0x20A0 format (1 flag byte @0x29 + 103B SysEx-safe struct @0x2A)
+    const v4Buf = new Uint8Array(MG300_FILE_FORMAT.HEADER_SIZE + MG300_FILE_FORMAT.SINGLE_PAYLOAD_V2_SIZE);
+    const v4View = new DataView(v4Buf.buffer);
+    v4View.setUint32(0, 25 + MG300_FILE_FORMAT.SINGLE_PAYLOAD_V2_SIZE, true);
+    v4View.setUint32(4, MG300_FILE_FORMAT.PRESET_MAGIC.length, true);
+    Buffer.from(MG300_FILE_FORMAT.PRESET_MAGIC, 'ascii').copy(v4Buf, 8);
+    v4View.setUint32(25, MG300_FILE_FORMAT.SINGLE_PAYLOAD_V2_SIZE, true);
+    v4View.setUint32(0x1d, 1, true);
+    v4View.setUint32(0x21, 10, true); // subver = 10
+    v4View.setUint32(0x25, MG300_FILE_FORMAT.PRODUCT_ID, true);
+    v4Buf[0x29] = 1;
+    // Shin on Crazy (13 chars) + chain + irVol=20 + bpm=120 (0x07, 0x08) + patchVolume=70
+    const shinBlocks = [0, 0, 5, 15, 1, 1, 7, 2, 3, 100, 3];
+    v4Buf.set(shinBlocks, 0x2a);
+    const shinNameBytes = [18, 33, 34, 39, 62, 40, 39, 62, 2, 43, 26, 51, 50];
+    v4Buf[0x2a + MG300_FILE_FORMAT.NAME_LENGTH_OFFSET] = shinNameBytes.length;
+    v4Buf.set(shinNameBytes, 0x2a + MG300_FILE_FORMAT.NAME_CHARS_OFFSET);
+    v4Buf[0x2a + MG300_FILE_FORMAT.IR_VOLUME_OFFSET] = 20;
+    v4Buf[0x2a + 100] = 0x07;
+    v4Buf[0x2a + 101] = 0x08;
+    v4Buf[0x2a + 102] = 70;
+
+    const parsedV4 = parseNuxPresetBuffer(v4Buf, 'Shin on Crazy.nuxpreset', 0);
+    expect(parsedV4.warnings).toHaveLength(0);
+    expect(parsedV4.presets[0]?.name).toBe('Shin on Crazy');
+    expect(parsedV4.presets[0]?.patchVolume).toBe(70);
+    expect(parsedV4.presets[0]?.irVolume).toBe(20);
+    expect(parsedV4.presets[0]?.signalChain).toEqual({
+      pedalEnabled: false,
+      compEnabled: false,
+      efxEnabled: true,
+      ampEnabled: true,
+      eqEnabled: true,
+      nrEnabled: true,
+      modEnabled: true,
+      dlyEnabled: true,
+      rvbEnabled: true,
+      irEnabled: true,
+    });
+
+    // Compact V4 buffer with subver=10 and payloadSize=115 (144 bytes total, 1 byte short of 0x2a+103)
+    // must throw truncated V4 error instead of silently falling back to V1 offset 0x29
+    const truncatedV4 = new Uint8Array(0x2a + 102);
+    truncatedV4.set(v4Buf.subarray(0, 0x2a + 102));
+    const truncView = new DataView(truncatedV4.buffer);
+    truncView.setUint32(0, truncatedV4.byteLength, true);
+    truncView.setUint32(0x19, truncatedV4.byteLength - MG300_FILE_FORMAT.HEADER_SIZE, true);
+    expect(() => parseNuxPresetBuffer(truncatedV4, 'truncated-v4.nuxpreset', 0)).toThrow(
+      /truncated V4/i,
+    );
   });
 
   it('4. Nome ausente: applies deterministic fallback ("Preset 1A" or filename) and emits warning when binary name is empty or all spaces', () => {
@@ -357,5 +411,68 @@ describe('@quicktone/reader — QuickTone Binary Parser & Discovery Service', ()
     } finally {
       unsubscribe();
     }
+  });
+
+  it('8. Extração binária para edição (parseNuxPresetWithStruct102): preserves struct102 & User IR metadata for V1/V2/V4/bundles and rejects JSON', () => {
+    const v1 = buildNuxPresetBinary({ name: 'Crunch V1', patchVolume: 62, formatVersion: 'v1' });
+    const parsedV1 = parseNuxPresetWithStruct102(v1);
+    expect(parsedV1.entries).toHaveLength(1);
+    expect(parsedV1.entries[0]?.struct102).toHaveLength(102);
+    expect(parsedV1.entries[0]?.usesUserIr).toBe(false);
+    expect(parsedV1.entries[0]?.userIrName).toBeNull();
+    expect(parsedV1.entries[0]?.hasEmbeddedIrWav).toBe(true);
+
+    const v2 = buildNuxPresetBinary({
+      name: 'Lead V2',
+      slotIndex: 9,
+      patchVolume: 74,
+      formatVersion: 'v2',
+    });
+    const parsedV2 = parseNuxPresetWithStruct102(v2);
+    expect(parsedV2.entries[0]?.preset.displayBank).toBe('3B');
+    expect(parsedV2.entries[0]?.struct102[MG300_FILE_FORMAT.PATCH_LEVEL_OFFSET]).toBe(74);
+
+    // Build V4 binary (subver=10) with CAB=100 (User IR) and User IR name at +0x57..+0x61
+    const v4Buf = new Uint8Array(
+      MG300_FILE_FORMAT.HEADER_SIZE + MG300_FILE_FORMAT.SINGLE_PAYLOAD_V2_SIZE,
+    );
+    const v4View = new DataView(v4Buf.buffer);
+    v4View.setUint32(0, 25 + MG300_FILE_FORMAT.SINGLE_PAYLOAD_V2_SIZE, true);
+    v4View.setUint32(4, MG300_FILE_FORMAT.PRESET_MAGIC.length, true);
+    Buffer.from(MG300_FILE_FORMAT.PRESET_MAGIC, 'ascii').copy(v4Buf, 8);
+    v4View.setUint32(25, MG300_FILE_FORMAT.SINGLE_PAYLOAD_V2_SIZE, true);
+    v4View.setUint32(0x1d, 1, true);
+    v4View.setUint32(0x21, 10, true);
+    v4View.setUint32(0x25, MG300_FILE_FORMAT.PRODUCT_ID, true);
+    v4Buf[0x29] = 1;
+    v4Buf.set([0, 0, 5, 15, 1, 1, 7, 2, 3, MG300_USER_IR_CAB_ID, 3], 0x2a);
+    const encodedName = encodeMg300PresetName('V4 User IR');
+    v4Buf[0x2a + MG300_FILE_FORMAT.NAME_LENGTH_OFFSET] = encodedName.length;
+    v4Buf.set(encodedName.bytes, 0x2a + MG300_FILE_FORMAT.NAME_CHARS_OFFSET);
+    const encodedIr = encodeMg300PresetName('CustomV30');
+    v4Buf[0x2a + 0x57] = encodedIr.length;
+    v4Buf.set(encodedIr.bytes.subarray(0, 10), 0x2a + 0x58);
+    v4Buf[0x2a + 100] = 0x07; // 120 BPM high nibble
+    v4Buf[0x2a + 101] = 0x08; // 120 BPM low nibble
+    v4Buf[0x2a + 102] = 68;
+
+    const parsedV4 = parseNuxPresetWithStruct102(v4Buf, { sourceFile: 'custom.nuxpreset' });
+    expect(parsedV4.entries).toHaveLength(1);
+    expect(parsedV4.entries[0]?.preset.name).toBe('V4 User IR');
+    expect(parsedV4.entries[0]?.usesUserIr).toBe(true);
+    expect(parsedV4.entries[0]?.userIrName).toBe('CustomV30');
+    expect(parsedV4.entries[0]?.struct102[100]).toBe(120);
+    expect(parsedV4.entries[0]?.struct102[101]).toBe(68);
+
+    // 36-preset bundle extraction
+    const bundle = buildNuxAllPresetsBinary([{ name: 'Slot One' }, { name: 'Slot Two' }], 'v2');
+    const parsedBundle = parseNuxPresetWithStruct102(bundle);
+    expect(parsedBundle.entries).toHaveLength(36);
+    expect(parsedBundle.entries[0]?.preset.name).toBe('Slot One');
+    expect(parsedBundle.entries[1]?.preset.name).toBe('Slot Two');
+
+    // Strictly rejects JSON disguise when parsing binary upload
+    const jsonBytes = new TextEncoder().encode(JSON.stringify({ name: 'Not binary' }));
+    expect(() => parseNuxPresetWithStruct102(jsonBytes)).toThrow(QuickTonePresetParseError);
   });
 });

@@ -5,10 +5,12 @@ import {
   MG300_FILE_FORMAT,
   MG300_MIDI_CC,
   MG300_SPACE_CHAR_CODE,
+  MG300_USER_IR_CAB_ID,
   Preset,
   type PresetOrigin,
   PresetSchema,
   decodeMg300PresetName,
+  decodeMg300UserIrName,
   encodeMg300PresetName,
   extractMg300SignalChain,
   parseBankLabel,
@@ -17,6 +19,19 @@ import {
 
 export interface ParsePresetResult {
   presets: Preset[];
+  warnings: string[];
+}
+
+export interface ParsedBinaryPresetEntry {
+  preset: Preset;
+  struct102: Uint8Array;
+  usesUserIr: boolean;
+  userIrName: string | null;
+  hasEmbeddedIrWav: boolean;
+}
+
+export interface ParseBinaryPresetResult {
+  entries: ParsedBinaryPresetEntry[];
   warnings: string[];
 }
 
@@ -277,42 +292,18 @@ function tryParseJsonPresetFallback(
   return { presets, warnings };
 }
 
-/**
- * Pure read-only binary/JSON parser for NUX MG-300 QuickTone preset buffers (`.nuxpreset`).
- *
- * Supported binary layouts (all prefixed by 29-byte header with magic `"MG300 Preset Data"`):
- * 1. Single Preset V1 (`payloadSize === 0x209F` = 8,351 B, or compact >= 114 B):
- *    `u32 version(1) + u32 subver + u32 productId(0x66) + 102B struct + IR WAV`
- * 2. Single Preset V2 (`payloadSize === 0x20A0` = 8,352 B, or compact >= 111 B):
- *    `u32 version(1) + u32 productId(0x66) + u8 slotIndex(0..35) + 102B struct + IR WAV`
- * 3. 36-Preset Bundle `MG300AllPreset.nuxpreset` (`payloadSize === 0x49664` = 300,644 B or `0x49688` = 300,680 B):
- *    `u32 version(1) + u32 productId(0x66) + 36 * record`
- */
-export function parseNuxPresetBuffer(
+function extractBinaryEntriesFromMg300Buffer(
   buffer: Uint8Array,
-  sourceFile?: string,
-  fallbackSlotIndex = 0,
-  updatedAt = new Date().toISOString(),
-): ParsePresetResult {
+  options: {
+    sourceFile?: string;
+    fallbackSlotIndex: number;
+    updatedAt: string;
+  },
+): ParseBinaryPresetResult {
+  const { sourceFile, fallbackSlotIndex, updatedAt } = options;
+
   if (!buffer || buffer.byteLength === 0) {
     throw new QuickTonePresetParseError('empty file (0 bytes)');
-  }
-
-  // Check if the buffer lacks the binary magic and starts with JSON '{' or '['
-  const looksLikeBinaryPreset =
-    buffer.byteLength >= MG300_FILE_FORMAT.HEADER_SIZE &&
-    Buffer.from(buffer.subarray(8, 25)).toString('ascii') === MG300_FILE_FORMAT.PRESET_MAGIC;
-
-  if (!looksLikeBinaryPreset) {
-    const jsonFallback = tryParseJsonPresetFallback(
-      buffer,
-      sourceFile,
-      fallbackSlotIndex,
-      updatedAt,
-    );
-    if (jsonFallback) {
-      return jsonFallback;
-    }
   }
 
   if (buffer.byteLength < MG300_FILE_FORMAT.HEADER_SIZE) {
@@ -355,6 +346,25 @@ export function parseNuxPresetBuffer(
   }
 
   const warnings: string[] = [];
+  const toEntry = (
+    struct102Slice: Uint8Array,
+    resolvedSlot: number,
+    hasEmbeddedIrWav: boolean,
+  ): ParsedBinaryPresetEntry => {
+    const struct102 = Uint8Array.from(struct102Slice);
+    const preset = buildPresetFromStruct102(struct102, resolvedSlot, {
+      sourceFile,
+      updatedAt,
+      warnings,
+    });
+    return {
+      preset,
+      struct102,
+      usesUserIr: struct102[0x09] === MG300_USER_IR_CAB_ID,
+      userIrName: decodeMg300UserIrName(struct102),
+      hasEmbeddedIrWav,
+    };
+  };
 
   // Format C: 36-Preset Bundle (MG300AllPreset.nuxpreset)
   const isAllPresetsBundle =
@@ -375,7 +385,7 @@ export function parseNuxPresetBuffer(
     }
 
     const recordStep = (payloadSize - 8) / 36;
-    const presets: Preset[] = [];
+    const entries: ParsedBinaryPresetEntry[] = [];
 
     for (let slot = 0; slot < 36; slot++) {
       const recordOffset = 0x25 + slot * recordStep;
@@ -398,34 +408,39 @@ export function parseNuxPresetBuffer(
         structOffset,
         structOffset + MG300_FILE_FORMAT.PRESET_STRUCT_SIZE,
       );
-
-      presets.push(
-        buildPresetFromStruct102(struct102, resolvedSlot, {
-          sourceFile,
-          updatedAt,
-          warnings,
-        }),
-      );
+      entries.push(toEntry(struct102, resolvedSlot, recordStep > 200));
     }
 
-    return { presets, warnings };
+    return { entries, warnings };
   }
 
-  // Format A: Single Preset V1 (12-byte payload header: [version=1, subver, productId=0x66] + 102B struct)
+  // Format A: Single Preset V1 / V4
   if (payloadSize >= 12 + MG300_FILE_FORMAT.PRESET_STRUCT_SIZE) {
     const version = view.getUint32(0x1d, true);
+    const subver = view.getUint32(0x21, true);
     const productIdV1 = view.getUint32(0x25, true);
     if (
       version === MG300_FILE_FORMAT.EXPECTED_VERSION &&
       productIdV1 === MG300_FILE_FORMAT.PRODUCT_ID
     ) {
-      const struct102 = buffer.subarray(0x29, 0x29 + MG300_FILE_FORMAT.PRESET_STRUCT_SIZE);
-      const preset = buildPresetFromStruct102(struct102, fallbackSlotIndex, {
-        sourceFile,
-        updatedAt,
+      let struct102: Uint8Array;
+      if (payloadSize === MG300_FILE_FORMAT.SINGLE_PAYLOAD_V2_SIZE || subver >= 10) {
+        if (buffer.byteLength < 0x2a + 103) {
+          throw new QuickTonePresetParseError('truncated V4 preset payload');
+        }
+        // QuickTone >= v2.4 / MG-300 V4 format (subver=10, payloadSize=0x20A0):
+        // 1 flag/slot byte at 0x29 followed by 103-byte SysEx-safe struct (split BPM nibbles at +100/+101)
+        struct102 = new Uint8Array(MG300_FILE_FORMAT.PRESET_STRUCT_SIZE);
+        struct102.set(buffer.subarray(0x2a, 0x2a + 100), 0);
+        struct102[100] = ((buffer[0x2a + 100]! & 0x0f) << 4) | (buffer[0x2a + 101]! & 0x0f);
+        struct102[101] = buffer[0x2a + 102]!;
+      } else {
+        struct102 = buffer.subarray(0x29, 0x29 + MG300_FILE_FORMAT.PRESET_STRUCT_SIZE);
+      }
+      return {
+        entries: [toEntry(struct102, fallbackSlotIndex, payloadSize > 500)],
         warnings,
-      });
-      return { presets: [preset], warnings };
+      };
     }
   }
 
@@ -440,18 +455,86 @@ export function parseNuxPresetBuffer(
       const slotByte = buffer[0x25] ?? fallbackSlotIndex;
       const resolvedSlot = slotByte >= 0 && slotByte <= 71 ? slotByte : fallbackSlotIndex;
       const struct102 = buffer.subarray(0x26, 0x26 + MG300_FILE_FORMAT.PRESET_STRUCT_SIZE);
-      const preset = buildPresetFromStruct102(struct102, resolvedSlot, {
-        sourceFile,
-        updatedAt,
+      return {
+        entries: [toEntry(struct102, resolvedSlot, payloadSize > 500)],
         warnings,
-      });
-      return { presets: [preset], warnings };
+      };
     }
   }
 
   throw new QuickTonePresetParseError(
     `unrecognized MG300 payload structure (payloadSize=${payloadSize})`,
   );
+}
+
+/**
+ * Pure read-only binary parser for `.nuxpreset` buffers that preserves raw `struct102`
+ * bytes and User IR metadata. Strictly rejects non-binary / JSON payloads.
+ */
+export function parseNuxPresetWithStruct102(
+  buffer: Uint8Array,
+  options: {
+    sourceFile?: string;
+    fallbackSlotIndex?: number;
+    updatedAt?: string;
+  } = {},
+): ParseBinaryPresetResult {
+  return extractBinaryEntriesFromMg300Buffer(buffer, {
+    sourceFile: options.sourceFile,
+    fallbackSlotIndex: options.fallbackSlotIndex ?? 0,
+    updatedAt: options.updatedAt ?? new Date().toISOString(),
+  });
+}
+
+/**
+ * Pure read-only binary/JSON parser for NUX MG-300 QuickTone preset buffers (`.nuxpreset`).
+ *
+ * Supported binary layouts (all prefixed by 29-byte header with magic `"MG300 Preset Data"`):
+ * 1. Single Preset V1 (`payloadSize === 0x209F` = 8,351 B, or compact >= 114 B):
+ *    `u32 version(1) + u32 subver + u32 productId(0x66) + 102B struct + IR WAV`
+ * 1b. Single Preset V4 (`subver >= 10` / `payloadSize === 0x20A0` = 8,352 B):
+ *    `u32 version(1) + u32 subver(10) + u32 productId(0x66) + u8 flag + 103B SysEx-safe struct (split BPM nibbles) + IR WAV`
+ * 2. Single Preset V2 (`payloadSize === 0x20A0` = 8,352 B, or compact >= 111 B):
+ *    `u32 version(1) + u32 productId(0x66) + u8 slotIndex(0..35) + 102B struct + IR WAV`
+ * 3. 36-Preset Bundle `MG300AllPreset.nuxpreset` (`payloadSize === 0x49664` = 300,644 B or `0x49688` = 300,680 B):
+ *    `u32 version(1) + u32 productId(0x66) + 36 * record`
+ */
+export function parseNuxPresetBuffer(
+  buffer: Uint8Array,
+  sourceFile?: string,
+  fallbackSlotIndex = 0,
+  updatedAt = new Date().toISOString(),
+): ParsePresetResult {
+  if (!buffer || buffer.byteLength === 0) {
+    throw new QuickTonePresetParseError('empty file (0 bytes)');
+  }
+
+  // Check if the buffer lacks the binary magic and starts with JSON '{' or '['
+  const looksLikeBinaryPreset =
+    buffer.byteLength >= MG300_FILE_FORMAT.HEADER_SIZE &&
+    Buffer.from(buffer.subarray(8, 25)).toString('ascii') === MG300_FILE_FORMAT.PRESET_MAGIC;
+
+  if (!looksLikeBinaryPreset) {
+    const jsonFallback = tryParseJsonPresetFallback(
+      buffer,
+      sourceFile,
+      fallbackSlotIndex,
+      updatedAt,
+    );
+    if (jsonFallback) {
+      return jsonFallback;
+    }
+  }
+
+  const parsed = extractBinaryEntriesFromMg300Buffer(buffer, {
+    sourceFile,
+    fallbackSlotIndex,
+    updatedAt,
+  });
+  return {
+    presets: parsed.entries.map((entry) => entry.preset),
+    warnings: parsed.warnings,
+  };
 }
 
 /**
