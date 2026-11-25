@@ -1,114 +1,98 @@
-# QuickTone Web Controller — NUX MG-300 LAN Controller
+# NUX MG-300 Web Controller
 
-Aplicação full-stack (**Node.js + TypeScript + Fastify + WebSocket + Zod** no backend e **React + TypeScript + Vite + Tailwind CSS** no frontend) para controlar uma pedaleira **NUX MG-300 (`NUX NME-300`)** pela rede Wi-Fi local, utilizando os arquivos locais de presets do **NUX QuickTone (`.nuxpreset` / `MG300AllPreset.nuxpreset`)** como fonte de dados somente leitura.
-
----
-
-## 1. Arquitetura do Monorepo
-
-```text
-NUXMG300-WEBAPP/
-├── docs/
-│   ├── TECHNICAL_DECISIONS.md     # ADRs e mapeamentos baseados em evidências reais
-│   ├── QUICKTONE_GUIDE.md         # Guia de configuração do QuickTone e formato binário .nuxpreset
-│   ├── MIDI_CONNECTION_GUIDE.md   # Guia de conexão USB-MIDI e protocolo da NUX MG-300
-│   ├── MOBILE_ACCESS_GUIDE.md     # Guia de acesso pelo celular/tablet via Wi-Fi local
-│   └── KNOWN_LIMITATIONS.md       # Limitações conhecidas e status de validação com hardware real
-├── packages/
-│   ├── shared/                    # @quicktone/shared — Schemas Zod, tipos TypeScript e protocolo MG-300
-│   ├── quicktone-reader/          # @quicktone/reader — Descoberta, parser binário somente leitura e watcher
-│   ├── midi-service/              # @quicktone/midi — Abstração MIDI independente, WinMM bridge, Mock e Tri-State
-│   ├── backend/                   # @quicktone/backend — Servidor Fastify (0.0.0.0), REST API, WebSocket e segurança LAN
-│   └── frontend/                  # @quicktone/frontend — Interface React mobile-first tema escuro para palco
-└── e2e/
-    └── controller.spec.ts         # Testes End-to-End com Playwright
-```
+Controle a sua pedaleira **NUX MG-300** pelo celular, tablet ou navegador do computador usando a rede Wi-Fi local.
 
 ---
 
-## 2. Principais Funcionalidades e Garantias de Segurança
+## O problema que este projeto resolve
 
-1. **Leitura Somente Leitura dos Presets Reais do QuickTone (`.nuxpreset`)**:
-   - Decodifica o formato binário real `"MG300 Preset Data"` (`8.380`/`8.381 B` para preset individual e `300.673`/`300.709 B` para pacote completo `MG300AllPreset.nuxpreset`), incluindo a estrutura de `102 bytes` (`0x66 B`), a tabela real de **72 caracteres (`0x00..0x47`)** da ROM LCD da MG-300 e o catálogo dos 36 presets de fábrica (`F1A..F9D`).
-   - Monitoramento em tempo real da pasta de presets (`fs.watch`) e configuração manual de diretório quando a pasta não é encontrada.
-2. **Abstração USB-MIDI Independente e Proteção da Pedaleira**:
-   - Mapeia os bancos `1A..9D` (usuário, slots `0..35`) e `F1A..F9D` (fábrica, slots `36..71`) para o comando real de seleção de preset da MG-300 (**`CC 0x3C` / `CC 60`**, `[0xB0, 0x3C, slotIndex]`), além de suportar `Program Change (0xC0)` e `Bank Select MSB (CC 0x00) / LSB (CC 0x20)`.
-   - Controla os CCs reais de volume validados no firmware da MG-300 (`0..100`):
-     - **`CC 0x40` (`CC 64`)**: Volume Global `MASTER` (`state[0x09]`).
-     - **`CC 0x4A` (`CC 74`)**: Volume do Preset `PATCH LEVEL` (`P.LVL`, `state[0x46F]`).
-     - **`CC 0x3D` (`CC 61`)**: Posição do Pedal de Expressão (`state[0x12]`).
-   - **Bloqueio contra CCs perigosos**: impede o envio de `CC 1..10` como comandos de volume (na MG-300, `CC 7` altera o modelo do bloco de Delay `state[0x411]`).
-3. **Modelo Tri-State de Sincronismo com o Hardware**:
-   - Diferencia explicitamente no backend e na interface:
-     - **`confirmed`**: Estado confirmado por mensagem recebida da pedaleira via MIDI IN (`confirmedState`).
-     - **`command_sent_unconfirmed`**: Último comando transmitido pelo computador via MIDI OUT (`lastSentCommand`), aguardando confirmação real do dispositivo.
-     - **`unknown`**: Estado desconhecido (inicial ou pós-desconexão).
-4. **Sincronização Multi-Cliente via WebSocket e Segurança LAN**:
-   - Servidor Fastify configurável em `0.0.0.0:3001`.
-   - Sincronização instantânea entre múltiplos celulares/tablets conectados na mesma rede Wi-Fi.
-   - Validação de origem (`Origin` restrito a localhost e sub-redes privadas RFC 1918) e autenticação simples configurável via PIN/Token (`QUICKTONE_AUTH_TOKEN` / cabeçalho `X-QuickTone-Token`).
+Quem usa a NUX MG-300 em ensaios, apresentações ao vivo ou estudos em casa conhece uma limitação prática: o software oficial **NUX QuickTone** exige que você esteja sentado na frente do computador, e a pedaleira no chão nem sempre fica em uma posição confortável para leitura rápida ou ajustes finos de volume entre uma música e outra.
+
+O **NUX MG-300 Web Controller** transforma o computador conectado à pedaleira em uma ponte sem fio para a sua rede local. Com ele, você pode prender o celular no pedestal do microfone ou deixar um tablet na estante e controlar a pedaleira à distância, direto pelo navegador, sem precisar instalar nenhum aplicativo no celular.
 
 ---
 
-## 3. Instalação, Execução e Testes
+## Como funciona na prática
 
-### Instalar dependências
+1. **A pedaleira fica conectada via USB ao computador** (notebook ou PC de apoio no palco, estúdio ou quarto).
+2. **O controlador roda no computador** e conversa diretamente com a MG-300 e com os seus arquivos de presets do QuickTone.
+3. **Qualquer dispositivo no mesmo Wi-Fi acessa o painel** pelo navegador (basta ler o QR Code exibido na tela ou digitar o endereço local).
+4. **Tudo acontece em tempo real**: se você trocar de timbre no celular, pisar no footswitch físico da pedaleira ou mexer na tela do computador, todos os dispositivos atualizam juntos no mesmo instante.
+
+---
+
+## Por que isso é útil na rotina do músico
+
+- **Liberdade no palco e no ensaio**: troque de banco e de timbre (`1A` a `9D` do usuário e `F1A` a `F9D` de fábrica) sem precisar ir até o notebook ou se abaixar para girar botões no chão.
+- **Confirmação real da pedaleira**: o painel mostra claramente a diferença entre um comando que acabou de ser enviado e o timbre que a pedaleira realmente confirmou estar ativo. No palco, você tem certeza absoluta de qual preset está soando.
+- **Ajuste rápido de níveis**: controle o **Volume Master**, o **Volume do Preset (Patch Level)** ou a posição do **Pedal de Expressão** em uma barra pensada para toque rápido com o dedo.
+- **Visão clara da cadeia de sinal**: veja de relance quais blocos estão ligados ou desligados no timbre atual (`COMP`, `EFX`, `AMP`, `IR`, `EQ`, `NR`, `MOD`, `DLY`, `RVB`), além do BPM configurado.
+- **Modo Palco e Modo Grade**: alterne entre uma visualização focada em botões grandes de footswitch (`A`, `B`, `C`, `D`) para tocar ao vivo e uma grade completa para localizar qualquer timbre pelo nome.
+- **Leitura segura dos seus timbres**: o sistema lê os nomes dos presets direto da memória da MG-300 conectada e também dos seus arquivos `.nuxpreset` salvos no computador, sempre em modo somente leitura para nunca alterar ou corromper seus arquivos originais.
+- **Proteção por PIN em redes compartilhadas**: se estiver usando o Wi-Fi de um estúdio, igreja ou casa de show, você pode ativar um PIN simples para garantir que só o seu celular possa enviar comandos para a pedaleira.
+
+---
+
+## Como começar a usar
+
+### Pré-requisitos
+
+- **Node.js** instalado no computador (versão 20 ou superior recomendada).
+- Pedaleira **NUX MG-300** conectada ao computador por um cabo Micro-USB de dados.
+- O programa **NUX QuickTone** deve estar **fechado** antes de conectar pelo controlador web, pois o Windows permite que apenas um programa use a conexão USB da pedaleira por vez.
+
+### 1. Instalar o projeto
+
+No terminal, dentro da pasta do projeto, instale as dependências:
+
 ```bash
 npm install
 ```
 
-### Executar verificação de tipos (TypeScript)
-```bash
-npm run typecheck
-```
+### 2. Iniciar o controlador (modo recomendado para uso normal e palco)
 
-### Executar testes unitários e de integração (Vitest + React Testing Library)
-```bash
-npm test
-```
+Compile a interface e inicie o servidor:
 
-### Executar testes End-to-End (Playwright)
-```bash
-npm run test:e2e
-```
-
-### Iniciar aplicação em modo de desenvolvimento
-```bash
-# Terminal 1 — Backend Fastify + WebSocket (0.0.0.0:3001)
-npm run dev:backend
-
-# Terminal 2 — Frontend Vite React (0.0.0.0:5173)
-npm run dev:frontend
-```
-
-### Compilar e iniciar para produção (Palco / LAN)
 ```bash
 npm run build
 npm start
 ```
 
+O terminal mostrará o endereço para abrir no próprio computador e o endereço da rede Wi-Fi para abrir no celular:
+
+- No computador: `http://localhost:3001`
+- No celular ou tablet (mesmo Wi-Fi): `http://<IP-DO-SEU-COMPUTADOR>:3001`
+
+Você também pode clicar em **Ajustes** no topo da tela do computador e apontar a câmera do celular para o **QR Code** gerado automaticamente.
+
+### 3. Modo de desenvolvimento (para quem quiser editar a interface ou o código)
+
+Se quiser rodar o servidor e a interface em terminais separados com atualização automática:
+
+```bash
+# Terminal 1 — Servidor e comunicação com a pedaleira
+npm run dev:backend
+
+# Terminal 2 — Interface web
+npm run dev:frontend
+```
+
 ---
 
-## 4. Endpoints da API REST e WebSocket
+## Dicas rápidas de uso
 
-| Método | Rota | Descrição |
-|---|---|---|
-| `GET` | `/api/health` | Status de saúde do servidor, uptime, estado MIDI e status de sincronização. |
-| `GET` | `/api/presets` | Lista de presets carregados do QuickTone, status da pasta e avisos de validação. |
-| `GET` | `/api/status` | Estado completo do controlador (`confirmedState`, `lastSentCommand`, `syncStatus`, portas MIDI). |
-| `POST` | `/api/presets/select` | Seleciona um preset por `presetId` (ex.: `"1A"`, `"F2C"`) ou `slotIndex` (`0..71`). |
-| `PUT` | `/api/volume` | Ajusta o volume (`0..100`) no alvo selecionado (`master_cc64`, `patch_cc74` ou `expression_cc61`). |
-| `POST` | `/api/midi/connect` | Conecta à porta USB-MIDI da MG-300 (`"NUX NME-300"` ou porta especificada). |
-| `POST` | `/api/midi/disconnect` | Desconecta da porta USB-MIDI ativa. |
-| `POST` | `/api/presets/config` | Configura manualmente o caminho da pasta de presets do QuickTone. |
-| `WS` | `/ws` | Canal WebSocket bidirecional para sincronização `state_sync` e `presets_updated` em tempo real. |
+- **Conectar a pedaleira**: assim que abrir a página, o controlador detecta automaticamente a porta `NUX NME-300`. Se você ligar a pedaleira depois de abrir o site, clique em **Conectar** na barra superior ou em **Sincronizar** para carregar os 36 timbres salvos na memória dela.
+- **Usar arquivos `.nuxpreset` do computador**: em **Ajustes**, você pode informar a pasta onde guarda seus arquivos `.nuxpreset` exportados pelo QuickTone, além de escolher se deseja exibir ou ocultar os 36 timbres de fábrica (`F1A` a `F9D`).
+- **Celular não carrega a página**: verifique no Windows se o seu Wi-Fi está marcado como **Rede Privada** para que o firewall local permita a conexão entre o celular e o computador na porta `3001`.
 
 ---
 
-## 5. Documentação Complementar
+## Guias adicionais
 
-- [Decisões Técnicas e Evidências (ADRs)](docs/TECHNICAL_DECISIONS.md)
-- [Guia de Configuração do QuickTone](docs/QUICKTONE_GUIDE.md)
-- [Guia de Conexão USB-MIDI](docs/MIDI_CONNECTION_GUIDE.md)
-- [Guia de Acesso pelo Celular (Wi-Fi Local)](docs/MOBILE_ACCESS_GUIDE.md)
-- [Relatório de Limitações Conhecidas e Validação de Hardware](docs/KNOWN_LIMITATIONS.md)
+Para instruções detalhadas sobre configurações específicas, consulte a pasta `docs/`:
+
+- [Guia de Acesso pelo Celular e Wi-Fi Local](docs/MOBILE_ACCESS_GUIDE.md)
+- [Guia de Conexão USB com a NUX MG-300](docs/MIDI_CONNECTION_GUIDE.md)
+- [Guia de Presets do QuickTone](docs/QUICKTONE_GUIDE.md)
+- [Limitações Conhecidas](docs/KNOWN_LIMITATIONS.md)
+- [Decisões Técnicas do Projeto](docs/TECHNICAL_DECISIONS.md)
