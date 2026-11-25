@@ -14,6 +14,9 @@ export const VolumeTargetSchema = z.enum([
 ]);
 export type VolumeTarget = z.infer<typeof VolumeTargetSchema>;
 
+export const MasterVolumeTargetSchema = z.literal('master_cc64');
+export type MasterVolumeTarget = z.infer<typeof MasterVolumeTargetSchema>;
+
 export const PresetMidiMappingSchema = z.object({
   protocol: MidiProtocolModeSchema,
   channel: z.number().int().min(0).max(15).default(0),
@@ -181,12 +184,12 @@ export type SelectPresetRequest = z.infer<typeof SelectPresetRequestSchema>;
 
 export const UpdateVolumeRequestSchema = z.object({
   volume: z.number().int().min(0).max(100),
-  target: VolumeTargetSchema.optional(),
+  target: MasterVolumeTargetSchema.optional(),
 });
 export type UpdateVolumeRequest = z.infer<typeof UpdateVolumeRequestSchema>;
 
 export const UpdateVolumeTargetRequestSchema = z.object({
-  target: VolumeTargetSchema,
+  target: MasterVolumeTargetSchema,
 });
 export type UpdateVolumeTargetRequest = z.infer<typeof UpdateVolumeTargetRequestSchema>;
 
@@ -226,6 +229,132 @@ export const PresetsResponseSchema = z.object({
 });
 export type PresetsResponse = z.infer<typeof PresetsResponseSchema>;
 
+// Pairing & Mobile Session Contracts
+
+export const PairingSessionInfoSchema = z.object({
+  sessionId: z.string(),
+  deviceName: z.string(),
+  remoteIp: z.string(),
+  createdAt: z.string(),
+  expiresAt: z.string(),
+  lastActivityAt: z.string(),
+});
+export type PairingSessionInfo = z.infer<typeof PairingSessionInfoSchema>;
+
+export const TrustedDeviceInfoSchema = z.object({
+  deviceId: z.string(),
+  deviceName: z.string(),
+  remoteIp: z.string(),
+  createdAt: z.string(),
+  lastConnectedAt: z.string(),
+  isCurrentlyActive: z.boolean(),
+});
+export type TrustedDeviceInfo = z.infer<typeof TrustedDeviceInfoSchema>;
+
+export const RemoveTrustedDevicePayloadSchema = z.object({
+  deviceId: z.string().trim().min(1).max(128),
+});
+export type RemoveTrustedDevicePayload = z.infer<typeof RemoveTrustedDevicePayloadSchema>;
+
+export const ExperimentalSaveResultSchema = z.object({
+  targetSlot: z.number().int().min(0).max(35),
+  displayBank: z.string(),
+  ackReceived: z.boolean(),
+  verified: z.boolean(),
+  mismatchedOffsets: z.array(z.number().int()),
+  backupPath: z.string(),
+  savedAt: z.string(),
+});
+export type ExperimentalSaveResult = z.infer<typeof ExperimentalSaveResultSchema>;
+
+export const ExperimentalSourceModeSchema = z.enum(['hardware', 'draft', 'imported']);
+export type ExperimentalSourceMode = z.infer<typeof ExperimentalSourceModeSchema>;
+
+export const ExperimentalEditStateSchema = z.object({
+  slot: z.number().int().min(0).max(35),
+  loaded: z.boolean(),
+  busy: z.boolean(),
+  dirty: z.boolean(),
+  sourceMode: ExperimentalSourceModeSchema,
+  sourceFileName: z.string().nullable(),
+  presetName: z.string().nullable(),
+  bpm: z.number().int().min(40).max(240),
+  timeFlag: z.number().int().min(0).max(1),
+  ampParams: z.array(z.number().int().min(0).max(127)),
+  blocksEnabled: z.array(z.boolean()),
+  blockModels: z.record(z.string(), z.number().int().min(0).max(127)),
+  blockParams: z.record(z.string(), z.array(z.number().int().min(0).max(127))),
+  cabEnabled: z.boolean(),
+  cabModel: z.number().int().min(0).max(127),
+  micModel: z.number().int().min(0).max(127),
+  irCut: z.number().int().min(0).max(2),
+  irVolume: z.number().int().min(0).max(40),
+  patchVolume: z.number().int().min(0).max(100),
+  hasUserIr: z.boolean(),
+  userIrName: z.string().nullable(),
+  userIrWarning: z.string().nullable(),
+  lastSave: ExperimentalSaveResultSchema.nullable(),
+});
+export type ExperimentalEditState = z.infer<typeof ExperimentalEditStateSchema>;
+
+export const PendingPairingRequestSchema = z.object({
+  requestId: z.string(),
+  deviceName: z.string(),
+  remoteIp: z.string(),
+  verificationCode: z.string(),
+  createdAt: z.string(),
+  expiresAt: z.string(),
+});
+export type PendingPairingRequest = z.infer<typeof PendingPairingRequestSchema>;
+
+export const PairingChallengeInfoSchema = z.object({
+  challengeId: z.string(),
+  pairingCode: z.string(),
+  pairingUrl: z.string(),
+  expiresAt: z.string(),
+});
+export type PairingChallengeInfo = z.infer<typeof PairingChallengeInfoSchema>;
+
+export const PairingSessionStatusSchema = z.enum([
+  'desktop',
+  'active',
+  'none',
+  'expired',
+  'revoked',
+]);
+export type PairingSessionStatus = z.infer<typeof PairingSessionStatusSchema>;
+
+export const PairingStatusResponseSchema = z.object({
+  isLocalDesktop: z.boolean(),
+  authenticated: z.boolean(),
+  sessionStatus: PairingSessionStatusSchema,
+  activeSession: PairingSessionInfoSchema.nullable(),
+  pendingRequests: z.array(PendingPairingRequestSchema),
+  activeChallenge: PairingChallengeInfoSchema.nullable(),
+  lanUrls: z.array(z.string()),
+  isTrustedDevice: z.boolean().optional(),
+  trustedDeviceName: z.string().nullable().optional(),
+  trustedDevices: z.array(TrustedDeviceInfoSchema).optional(),
+});
+export type PairingStatusResponse = z.infer<typeof PairingStatusResponseSchema>;
+
+export const PairingRequestPayloadSchema = z.object({
+  pairingCode: z.string().trim().min(6).max(128),
+  deviceName: z.string().trim().min(1).max(80).optional(),
+});
+export type PairingRequestPayload = z.infer<typeof PairingRequestPayloadSchema>;
+
+export const PairingPollPayloadSchema = z.object({
+  requestId: z.string().trim().min(1).max(128),
+  claimSecret: z.string().trim().min(1).max(128),
+});
+export type PairingPollPayload = z.infer<typeof PairingPollPayloadSchema>;
+
+export const PairingDecisionPayloadSchema = z.object({
+  requestId: z.string().trim().min(1).max(128),
+});
+export type PairingDecisionPayload = z.infer<typeof PairingDecisionPayloadSchema>;
+
 // WebSocket Messages
 
 export const WsServerMessageSchema = z.discriminatedUnion('type', [
@@ -241,6 +370,19 @@ export const WsServerMessageSchema = z.discriminatedUnion('type', [
     directory: z.string().nullable(),
     directoryStatus: PresetsDirectoryStatusSchema,
     warnings: z.array(z.string()),
+    timestamp: z.string(),
+  }),
+  z.object({
+    type: z.literal('pairing_updated'),
+    activeSession: PairingSessionInfoSchema.nullable(),
+    pendingRequests: z.array(PendingPairingRequestSchema),
+    activeChallenge: PairingChallengeInfoSchema.nullable(),
+    trustedDevices: z.array(TrustedDeviceInfoSchema).optional(),
+    timestamp: z.string(),
+  }),
+  z.object({
+    type: z.literal('experimental_state_sync'),
+    state: ExperimentalEditStateSchema,
     timestamp: z.string(),
   }),
   z.object({

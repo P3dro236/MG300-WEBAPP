@@ -1,4 +1,4 @@
-import type { PresetSignalChain } from './contracts.js';
+import type { Preset, PresetSignalChain } from './contracts.js';
 
 /**
  * @quicktone/shared — Evidence-Backed NUX MG-300 Protocol & QuickTone File Format Constants
@@ -37,9 +37,11 @@ export const MG300_FILE_FORMAT = {
   SINGLE_PAYLOAD_V2_SIZE: 0x20a0, // 8,352 B (8-byte header [ver=1, prod=0x66] + 1 B slot + 102 B preset + 8,241 B IR WAV)
   ALL_PAYLOAD_V1_SIZE: 0x49664, // 300,644 B (8-byte header [ver=1, prod=0x66] + 36 * 0x209F)
   ALL_PAYLOAD_V2_SIZE: 0x49688, // 300,680 B (8-byte header [ver=1, prod=0x66] + 36 * 0x20A0)
-  NAME_LENGTH_OFFSET: 0x44, // Inside the 102-byte preset struct: 1..16
-  NAME_CHARS_OFFSET: 0x45, // Inside the 102-byte preset struct: 16 bytes (0x45..0x54)
-  MAX_NAME_LENGTH: 16,
+  NAME_LENGTH_OFFSET: 0x44, // Inside the 102-byte preset struct: 1..18
+  NAME_CHARS_OFFSET: 0x45, // Inside the 102-byte preset struct: 18 bytes (0x45..0x56), next field starts at 0x57
+  // Verified empirically on physical NUX MG-300: slot 10 (3C) has rawLen=17 at 0x44 ("Metallica Kirk H.")
+  // and slot 14 (4C) has residual name bytes up to 0x56, with the next field consistently at 0x57 across all 36 slots.
+  MAX_NAME_LENGTH: 18,
   IR_VOLUME_OFFSET: 0x62, // 0..40
   TIME_FLAG_OFFSET: 0x63,
   BPM_ENCODED_OFFSET: 0x64,
@@ -58,7 +60,8 @@ export const MG300_CHAR_TABLE =
 export const MG300_SPACE_CHAR_CODE = 0x3e; // 62 (' ')
 
 /**
- * Decodes a 16-byte MG-300 character buffer (using length byte at +0x44 and chars at +0x45..+0x54).
+ * Decodes an MG-300 preset name buffer (using length byte at +0x44 and chars at +0x45..+0x56, up to 18 bytes).
+ * Note: glyph index 0x00 represents 'A' and is never a null terminator.
  */
 export function decodeMg300PresetName(struct102: Uint8Array): string {
   if (struct102.length < MG300_FILE_FORMAT.PRESET_STRUCT_SIZE) {
@@ -80,7 +83,7 @@ export function decodeMg300PresetName(struct102: Uint8Array): string {
 }
 
 /**
- * Encodes an ASCII string (up to 16 chars) into MG-300 character indices (0x00..0x47).
+ * Encodes an ASCII string (up to 18 chars) into MG-300 character indices (0x00..0x47).
  * Useful for test fixtures and characterization tests.
  */
 export function encodeMg300PresetName(name: string): { length: number; bytes: Uint8Array } {
@@ -436,4 +439,87 @@ export function parseMg300SysExMessage(
   }
 
   return null;
+}
+
+export type PresetCategory = 'user' | 'factory';
+
+/**
+ * Normalizes a preset name for consistent comparison across ROM catalog, hardware dumps, and localStorage.
+ */
+export function normalizePresetName(name: string): string {
+  return name.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+export const MG300_FACTORY_PRESET_NAME_SET: ReadonlySet<string> = new Set(
+  MG300_FACTORY_PRESETS.map((p) => normalizePresetName(p.name)),
+);
+
+/**
+ * Identifies synthetic placeholder/demo presets (e.g., "User 1A".."User 9D") that must not appear in the library.
+ */
+export function isPlaceholderPreset(
+  preset: Pick<Preset, 'name' | 'origin' | 'displayBank'>,
+): boolean {
+  if (preset.origin === 'placeholder') {
+    return true;
+  }
+  const normalized = preset.name.trim();
+  if (/^user\s+f?[1-9][a-d]$/i.test(normalized)) {
+    return true;
+  }
+  return false;
+}
+
+/** Slot 4D (user slot 15) — single canonical experimental edit slot and always-visible user slot. */
+export const MG300_EXPERIMENTAL_SLOT = 15;
+export const MG300_EXPERIMENTAL_SLOT_LABEL = '4D' as const;
+
+/** User slots that must always remain visible in the User tab even if they still hold a factory copy name. */
+const ALWAYS_VISIBLE_USER_SLOT_INDICES: ReadonlySet<number> = new Set([MG300_EXPERIMENTAL_SLOT]);
+
+/**
+ * Classifies a preset consistently into 'user' or 'factory' using origin, slot metadata, and normalized name,
+ * avoiding misclassifying unmodified factory copies stored in user slots (5A..9D) solely by slot position.
+ * Slot 4D (index 15) is always kept in 'user' so the experimental edit slot remains directly accessible.
+ */
+export function classifyPresetCategory(
+  preset: Pick<Preset, 'slotIndex' | 'bankType' | 'name' | 'origin'>,
+): PresetCategory {
+  if (preset.origin === 'factory' || preset.slotIndex >= 36) {
+    return 'factory';
+  }
+  if (ALWAYS_VISIBLE_USER_SLOT_INDICES.has(preset.slotIndex)) {
+    return 'user';
+  }
+  if (MG300_FACTORY_PRESET_NAME_SET.has(normalizePresetName(preset.name))) {
+    return 'factory';
+  }
+  return 'user';
+}
+
+/**
+ * Filters out placeholder/demo presets and deduplicates unmodified factory copies residing in user slots
+ * when canonical ROM factory presets (F1A..F9D) are already present.
+ */
+export function filterVisibleLibraryPresets<
+  T extends Pick<Preset, 'slotIndex' | 'bankType' | 'name' | 'origin' | 'displayBank'>,
+>(presets: readonly T[]): T[] {
+  const nonPlaceholders = presets.filter((p) => !isPlaceholderPreset(p));
+  const romFactoryNames = new Set<string>();
+  for (const preset of nonPlaceholders) {
+    if (preset.slotIndex >= 36 || preset.origin === 'factory') {
+      romFactoryNames.add(normalizePresetName(preset.name));
+    }
+  }
+
+  return nonPlaceholders.filter((preset) => {
+    if (
+      preset.slotIndex < 36 &&
+      classifyPresetCategory(preset) === 'factory' &&
+      romFactoryNames.has(normalizePresetName(preset.name))
+    ) {
+      return false;
+    }
+    return true;
+  });
 }
