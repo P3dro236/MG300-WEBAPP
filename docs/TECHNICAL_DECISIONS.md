@@ -1,17 +1,21 @@
 # Registro de Decisões Técnicas — QuickTone Web Controller
 
-## ADR-001: Parser Binário Somente Leitura para `.nuxpreset` (`MG300 Preset Data`)
-- **Contexto**: A investigação dos arquivos reais no computador (`EaglesDF Crunch.nuxpreset`, `SCORPIONS.nuxpreset` e `QuickTone.exe` `0x004A6A80..0x004A7620`) comprovou que o QuickTone armazena presets da MG-300 em containers binários com magic `"MG300 Preset Data"`, contendo structs de `102` bytes (`0x66 B`) e nomes codificados em uma tabela proprietária de 72 glifos (`0x00..0x47`).
-- **Decisão**: Implementar parser binário estrito e somente leitura que decodifica tanto arquivos `.nuxpreset` individuais (`8.380`/`8.381 B`) quanto pacotes completos `MG300AllPreset.nuxpreset` (`300.673`/`300.709 B`) e arquivos JSON auxiliares, com fallback configurável manualmente e catálogo dos 36 presets de fábrica (`F1A..F9D`) extraídos de `0x0801917C`.
+## ADR-001: Formato de Nomes de Presets de até 18 Bytes (`0x44..0x56`)
+- **Contexto**: A captura SysEx real do slot `10` (`3C`) na NUX MG-300 comprovou o nome `"Metallica Kirk H."` com comprimento `17` em `+0x44` e glifos em `+0x45..+0x55`, e slot `14` (`4C`) com bytes residuais até `+0x56` antes do próximo campo em `+0x57`.
+- **Decisão**: Atualizar `MG300_FILE_FORMAT.MAX_NAME_LENGTH` para `18` (`0x45..0x56`) mantendo intactos os demais bytes da estrutura de `102 bytes`.
 
-## ADR-002: Proteção contra Mensagens MIDI Não Validadas e Mapeamento Real da MG-300
-- **Contexto**: No firmware da MG-300 (`FUN_08038d04`), `CC 1..10` controlam a seleção/bypass dos blocos de efeito (`CC 7` altera o bloco de Delay `state[0x411]`), enquanto a troca de presets usa `CC 0x3C` (`60`, valores `0..71`) e os volumes usam `CC 0x40` (`64`, Master Volume `0..100`), `CC 0x4A` (`74`, Patch Level `0..100`) e `CC 0x3D` (`61`, Expression Pedal `0..100`).
-- **Decisão**: Bloquear o envio de CCs de blocos de efeito (`CC 1..10`) como comandos de volume no modo seguro MG-300, usar `CC 0x3C` (`0..71`) para seleção nativa de preset na MG-300 (mantendo suporte explícito na abstração `IMidiAdapter` para `Program Change 0xC0` e `Bank Select MSB 0x00 / LSB 0x20`), e restringir os valores de volume da MG-300 à faixa validada `0..100`.
+## ADR-002: Controle Exclusivo de Master Volume (`CC 0x40`)
+- **Contexto**: Para operação segura e direta ao vivo sem seletores de fader nem confusão com `Patch Level` ou `Expression`, todo controle de volume na interface e na API deve atuar exclusivamente no Master Volume.
+- **Decisão**: Restringir `UpdateVolumeRequestSchema`, `UpdateVolumeTargetRequestSchema`, `ControllerStateManager` e `MidiService.setVolume`/`setVolumeTarget` ao alvo `master_cc64` (`CC 64`), preservando as definições de protocolo internas no pacote compartilhado para compatibilidade de baixo nível.
 
-## ADR-003: Modelo Tri-State de Sincronização com o Dispositivo
-- **Contexto**: O envio de uma mensagem MIDI OUT não garante que a pedaleira executou a alteração; somente uma mensagem MIDI IN vinda da pedaleira confirma o estado real do hardware.
-- **Decisão**: Separar estritamente `confirmedState` (atualizado apenas por eventos MIDI IN da pedaleira), `lastSentCommand` (atualizado ao transmitir via MIDI OUT) e `syncStatus` (`'confirmed' | 'command_sent_unconfirmed' | 'unknown'`).
+## ADR-003: Persistência Local Versionada via `localStorage` e Classificação Usuário/Fábrica
+- **Contexto**: Exigir configuração de pastas do QuickTone gerava alertas desnecessários e não persistia o catálogo no navegador; além disso, placeholders (`User 1A..9D`) e cópias de fábrica nos slots `4D..9D` poluíam a lista de presets do usuário.
+- **Decisão**: Remover a dependência de pastas do fluxo principal, persistir presets e preferências em `localStorage` (`mg300_webapp_storage_v1`) com merge não-destrutivo e recuperação de dados corrompidos, ocultar placeholders e classificar presets em apenas duas categorias (`Usuário` e `Fábrica`) usando metadados e normalização de nomes.
 
-## ADR-004: Segurança Mínima para Operação em Rede Local (LAN)
-- **Contexto**: O servidor Fastify escuta em `0.0.0.0` para permitir acesso por celulares e tablets na mesma rede Wi-Fi.
-- **Decisão**: Implementar validação de cabeçalho `Origin` (permitindo apenas origens locais/RFC1918 ou explicitamente autorizadas) e middleware de autenticação simples configurável via token/PIN (`QUICKTONE_AUTH_TOKEN` validado pelo header `X-QuickTone-Token` ou `Authorization: Bearer`) em todas as rotas de controle (`POST`/`PUT`).
+## ADR-004: Pareamento Mobile Obrigatório via QR Code, Sessão Única e Proteção contra DNS Rebinding
+- **Contexto**: Um PIN opcional em texto aberto permitia acesso por IP na LAN e suportava múltiplos controladores simultâneos sem aprovação explícita.
+- **Decisão**: Implementar `PairingManager` no backend com desafios QR temporários de uso único, aprovação obrigatória no desktop com código de 6 dígitos, sessões em cookie `HttpOnly; SameSite=Strict`, limite rigoroso de 1 celular controlador (revogando imediatamente sessões anteriores), expiração, revogação manual, rate limiting e validação estrita de `Host`, `Origin` e IPs privados.
+
+## ADR-005: Estabilidade de Inicialização MIDI/WS e Fader de Volume
+- **Contexto**: `<StrictMode>` causava reconexão WS imediata no boot, recompilações repetidas do bridge C# atrasavam a inicialização WinMM, e badges dinâmicos + ecos WebSocket em voo faziam o indicador de volume piscar.
+- **Decisão**: Adicionar cache de `bridge.dll` no `WinMmMidiAdapter`, mutex `connectInFlight` no `MidiService`, deduplicação de sockets no `QuickToneWsManager`, larguras fixas sem transições nos badges do `VolumeSlider` e guarda `isDraggingVolumeRef` contra retrocesso de volume durante arrasto.

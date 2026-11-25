@@ -1,33 +1,27 @@
 # Relatório de Limitações Conhecidas e Estado de Validação de Hardware
 
-Este documento registra com transparência as limitações técnicas do protocolo da **NUX MG-300 (`NUX NME-300`, firmware V4.02.23)**, do ambiente Windows local e o status atual da validação com o hardware físico.
+Este documento registra com transparência as limitações técnicas da **NUX MG-300 (`NUX NME-300`, firmware V4.02.23)** e o escopo da validação física e automatizada.
 
 ---
 
-## 1. Status da Validação Física com a Pedaleira Real (`NUX MG-300`)
+## 1. Status da Validação com a Pedaleira Real (`NUX MG-300`)
 
-Validação física executada e aprovada com uma **NUX MG-300 real (`NUX NME-300`, `VID=0x1FC9, PID=0x8260`)** conectada via USB ao Windows (`winmm.dll`):
-- **Portas WinMM detectadas e emparelhadas (`duplex`)**: `NUX NME-300 MIDI IN` (`MID=0x0001, PID=0x0019`) + `NUX NME-300 MIDI OUT` (`MID=0x0001, PID=0x001A`) → exibida como **`"NUX NME-300"`**.
-- **Identidade de Firmware via SysEx (`0x00` → `0x10`)**: **`NUX_MG1X · V01_20191106`**.
-- **Sincronização Read-Only da Memória via SysEx (`0x19` → `0x18`, `0x13`/`0x07` → `0x06`)**:
-  - Leitura completa dos **36 presets de usuário** gravados na pedaleira (`1A`..`9D`, ex.: `1A "SYSTEM IR"`, `1B "Slash"`, `1C "Black Sa"`, `1D "DAVID GILMOUR"`), incluindo `Patch Level (P.LVL)` e cadeia de sinal.
-  - Leitura e confirmação do preset ativo e do Master Volume global (`0..100`).
-- **Troca Real de Presets (`CC 0x3C` / `CC 60`) e Volume Master (`CC 0x40` / `CC 64`)**:
-  - Validado fluxo completo **Interface/API REST → MIDI OUT (`[0xB0, 0x3C, slot]` e `[0xB0, 0x40, vol]`) → `command_sent_unconfirmed` → readback SysEx `0x18` → `confirmed` via WebSocket `state_sync`**, tanto em presets de usuário (`1D` ↔ `1B`) quanto em presets de fábrica (`F1A`) e ajuste reversível de Master Volume (`24% → 26% → 24%`).
-- **Observação empírica sobre `Patch Level` (`CC 0x4A` / `CC 74`)**:
-  - O comando `[0xB0, 0x4A, val]` altera o nível em execução na RAM da pedaleira, porém a consulta SysEx de slot (`0x07 → 0x06`) lê o registro armazenado do patch (sem persistência automática em Flash), mantendo o estado em `command_sent_unconfirmed` até que o usuário salve o preset ou receba confirmação via MIDI IN — comportamento fiel à regra de não falsificar confirmação.
+Validação read-only executada com uma **NUX MG-300 real (`NUX NME-300`)** conectada via USB ao Windows (`winmm.dll`):
+- **Leitura completa dos 36 slots de usuário (`1A..9D`) via SysEx (`0x07 → 0x06`)**:
+  - Slot `3C` (índice `10`) capturado e decodificado corretamente como **`"Metallica Kirk H."`** (`17` caracteres em `+0x45..+0x55`, byte `+0x57 = 16` preservado).
+  - Identificados `15` presets personalizados (`1A..4C`) e `21` cópias de fábrica não editadas (`4D..9D`, como `VT Dist lead`, `RG J. Mayer` até `EmotiveBallad`), corretamente classificadas como **Fábrica** e deduplicadas contra `F1A..F9D`.
+- **Troca de Presets (`CC 0x3C`) e Master Volume (`CC 0x40`)**: validados em hardware real e em testes automatizados com `MockMidiAdapter`.
 
 ---
 
-## 2. Limitações Técnicas Conhecidas da NUX MG-300 e do QuickTone
+## 2. Limitações Conhecidas e Testes Dependentes de Hardware/Rede Física
 
 1. **Acesso Exclusivo à Porta USB-MIDI no Windows (`winmm.dll`)**:
-   - O subsistema Windows Multimedia (`winmm.dll`) não permite que dois processos abram simultaneamente a porta `"NUX NME-300"`. Se o software desktop NUX QuickTone estiver aberto, o `QuickTone Web Controller` detectará e reportará o erro `PORT_BUSY` (`Porta MIDI ocupada`).
-2. **Confirmação Unidirecional vs Bidirecional (`confirmedState` vs `lastSentCommand`)**:
-   - No firmware `V4.02.23` (`FUN_08017c34` e `FUN_08038d04`), quando o músico gira um knob ou pisa em um footswitch **na própria pedaleira**, o `STM32F103` envia imediatamente `[0xB0, 0x3C, slot]` ou `[0xB0, 0x40|0x4A, vol]` para o PC via MIDI IN.
-   - Contudo, quando o **PC envia** `[0xB0, 0x3C, slot]` ou `[0xB0, 0x40, vol]` para a pedaleira, a rotina `FUN_08038d04` atualiza simultaneamente o valor atual (`state[2]` / `state[9]`) e o registrador de espelho (`state[0x13A]` / `state[0x13C]`), de modo que o `STM32F103` **não ecoa automaticamente** o mesmo `0xB0` de volta pela UART/USB após receber um CC do host (a menos que uma consulta de status SysEx `subcmd = 0x18` / `0x19` seja solicitada ou o usuário interaja com o pedal).
-   - Por fidelidade estrita à regra da Seção 4 (*"Não apresente um comando enviado como confirmação de que a pedaleira executou a alteração"*), o aplicativo mantém o comando como **`command_sent_unconfirmed` ("Comando enviado")** até que uma mensagem real chegue pelo canal MIDI IN da pedaleira.
-3. **Ausência de Pasta Padrão Fixa de Presets no QuickTone**:
-   - O QuickTone salva apenas `com.nux.quicktone.cfg` (`30 B`) em `Documents\NUX`; os arquivos `.nuxpreset` ficam na pasta escolhida pelo usuário ao exportar (neste computador, encontrados em `CrossDevice\S25+ de Pedro\storage\Download\EaglesDF Crunch.nuxpreset` e `SCORPIONS.nuxpreset`). Quando um arquivo `.nuxpreset` individual formato V1 (`0x209F` B) é exportado isoladamente, ele não grava obrigatoriamente o banco de destino (`1A..9D`), sendo alocado sequencialmente nos slots de usuário disponíveis ou conforme ordenação da pasta.
-4. **Program Change Padrão (`0xC0`) Não Despachado no Firmware Original V4.02.23**:
-   - A MG-300 original usa `CC 0x3C` (`CC 60`, valores `0..71`) para seleção de preset via USB-MIDI; mensagens `0xC0` puras são ignoradas por `FUN_00010b86` / `FUN_08039c3c`. O `MidiService` implementa ambos (`selectMg300Preset` com `CC 60` por padrão e `sendProgramChange` / `sendBankSelect` na abstração `IMidiAdapter`).
+   - Apenas um processo por vez pode abrir a porta `"NUX NME-300"`. Feche o NUX QuickTone ou DAWs antes de conectar.
+2. **User IRs customizados em `.nuxpreset` importados (`CAB === 100`)**:
+   - A gravação via SysEx `0x0E` grava os 102 bytes de parâmetros, cadeia de efeitos, nome e BPM no STM32. O envio do arquivo de áudio WAV do User IR (protocolo separado `0x50/0x58` no chip NXP) não é feito nesta etapa; a interface exibe aviso explícito ao importar/gravar presets que usam User IR.
+3. **Testes que exigem hardware ou rede física para validação manual final**:
+   - Validação prática no hardware físico da gravação `0x0E` em múltiplos slots de Usuário (`1A–9D`), troca ao vivo de modelos (`CC 1..10`) e persistência após desligar/religar (o fluxo completo foi validado em testes automatizados com simulador `FakePedalAdapter`).
+   - Teste manual de câmera do celular físico na mesma rede Wi-Fi escaneando o QR Code gerado na tela do computador e confirmando o controle ao vivo (a lógica completa de pareamento, cookie `HttpOnly`, bloqueio de não autorizados, limite de 1 celular, dispositivos confiáveis e revogação foi validada em testes automatizados no backend e frontend).
+   - Teste manual prolongado de arrasto contínuo do slider de Master Volume com a pedaleira física conectada para confirmar visualmente ausência total de piscagem em tela real.
+   - Teste de reconexão física desconectando e reconectando o cabo USB-MIDI com o servidor em execução.
