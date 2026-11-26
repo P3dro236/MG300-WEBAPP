@@ -1,0 +1,79 @@
+/* MG Control Design System Tokens — Graphite Chassis v2 (Canonical Shared Contract) */
+
+:root {
+  /* Core Surfaces (cool graphite — never pure #000) */
+  --bg-base: #111317;
+  --bg-surface: #181a20;
+  --bg-elevated: #21242c;
+  --bg-recess: #0b0c0f;
+  --bg-scrim: rgba(11, 12, 15, 0.78);
+
+  /* Closed 3-step Hairline Borders */
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --border-hover: rgba(255, 255, 255, 0.26);
+
+  /* Typography (WCAG 2.1 AA verified) */
+  --text-primary: #eceef2;
+  --text-muted: #9399a6;
+  --text-dim: #7e8696;
+  --text-disabled: #5c6373;
+
+  /* Single Functional Accent (Hardware Amber) */
+  --accent: #e5a23c;
+  --accent-hover: #f0b454;
+  --accent-soft: rgba(229, 162, 60, 0.12);
+  --accent-border: rgba(229, 162, 60, 0.42);
+  --accent-ink: #0b0c0f;
+
+  /* Real Hardware Semantic States */
+  --status-confirmed: #22c55e;
+  --status-confirmed-bg: rgba(34, 197, 94, 0.1);
+  --status-confirmed-border: rgba(34, 197, 94, 0.42);
+
+  --status-warning: #e5a23c;
+  --status-warning-bg: rgba(229, 162, 60, 0.12);
+  --status-warning-border: rgba(229, 162, 60, 0.42);
+
+  --status-error: #f87171;
+  --status-error-led: #ef4444;
+  --status-error-bg: rgba(239, 68, 68, 0.12);
+  --status-error-border: rgba(239, 68, 68, 0.45);
+  --destructive-solid: #b91c1c;
+  --destructive-solid-hover: #991b1b;
+
+  --status-info: #60a5fa;
+  --status-info-bg: rgba(96, 165, 250, 0.12);
+  --status-info-border: rgba(96, 165, 250, 0.42);
+
+  /* Fader */
+  --fader-fill: #d1d5db;
+  --fader-thumb: #eceef2;
+
+  /* Typography Stacks */
+  --font-stack-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    sans-serif;
+  --font-stack-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco,
+    Consolas, monospace;
+
+  /* Closed 4-step Radii */
+  --radius-sm: 0.25rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+  --radius-full: 9999px;
+
+  /* Elevation & Layout */
+  --shadow-modal: 0 16px 40px rgba(0, 0, 0, 0.55);
+  --header-height: 4rem;
+  --container-max: 72rem;
+  --z-sticky: 30;
+  --z-drawer: 40;
+  --z-modal: 50;
+
+  /* Motion */
+  --ease-hardware: cubic-bezier(0.2, 0, 0, 1);
+  --ease-editorial: cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-press: 120ms;
+  --duration-ui: 150ms;
+  --duration-enter: 280ms;
+}

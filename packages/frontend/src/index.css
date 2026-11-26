@@ -1,31 +1,131 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@import "./styles/tokens.css";
 
-:root {
-  color-scheme: dark;
-  --chassis-base: #0d0e10;
-  --chassis-panel: #14161a;
-  --chassis-switch: #1b1e24;
-  --chassis-recess: #090a0c;
-  --chassis-hairline: rgba(255, 255, 255, 0.08);
-  --chassis-hairline-strong: rgba(255, 255, 255, 0.16);
+@theme inline {
+  --font-sans: var(--font-stack-sans);
+  --font-mono: var(--font-stack-mono);
+
+  --color-bg-base: var(--bg-base);
+  --color-bg-surface: var(--bg-surface);
+  --color-bg-elevated: var(--bg-elevated);
+  --color-bg-recess: var(--bg-recess);
+  --color-bg-scrim: var(--bg-scrim);
+
+  --color-border-subtle: var(--border-subtle);
+  --color-border-strong: var(--border-strong);
+  --color-border-hover: var(--border-hover);
+
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-border: var(--accent-border);
+  --color-accent-ink: var(--accent-ink);
+
+  --color-text-primary: var(--text-primary);
+  --color-text-muted: var(--text-muted);
+  --color-text-dim: var(--text-dim);
+  --color-text-disabled: var(--text-disabled);
+
+  --color-status-confirmed: var(--status-confirmed);
+  --color-status-confirmed-bg: var(--status-confirmed-bg);
+  --color-status-confirmed-border: var(--status-confirmed-border);
+
+  --color-status-warning: var(--status-warning);
+  --color-status-warning-bg: var(--status-warning-bg);
+  --color-status-warning-border: var(--status-warning-border);
+
+  --color-status-error: var(--status-error);
+  --color-status-error-led: var(--status-error-led);
+  --color-status-error-bg: var(--status-error-bg);
+  --color-status-error-border: var(--status-error-border);
+  --color-destructive-solid: var(--destructive-solid);
+  --color-destructive-solid-hover: var(--destructive-solid-hover);
+
+  --color-status-info: var(--status-info);
+  --color-status-info-bg: var(--status-info-bg);
+  --color-status-info-border: var(--status-info-border);
 }
 
-html,
-body {
-  margin: 0;
-  padding: 0;
-  min-height: 100%;
-  background-color: var(--chassis-base);
-  color: #f3f4f6;
-  overflow-x: hidden;
-  -webkit-tap-highlight-color: transparent;
-  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+@layer base {
+  html,
+  body {
+    margin: 0;
+    padding: 0;
+    min-height: 100%;
+    color-scheme: dark;
+    background-color: var(--bg-base);
+    color: var(--text-primary);
+    font-family: var(--font-stack-sans);
+    overflow-x: clip;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  }
+
+  body {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+  }
+
+  button,
+  a,
+  input,
+  select {
+    touch-action: manipulation;
+  }
+
+  *,
+  ::before,
+  ::after {
+    border-color: var(--border-subtle);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background-color: color-mix(in srgb, var(--accent) 25%, transparent);
+    color: var(--text-primary);
+  }
 }
 
-.tabular-nums {
-  font-variant-numeric: tabular-nums;
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@layer components {
+  .surface-card {
+    background-color: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+  }
+
+  .surface-elevated {
+    background-color: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+  }
+
+  .surface-recess {
+    background-color: var(--bg-recess);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+  }
 }
 
 /* Precision anodized chassis fader track and rectangular thumb */
@@ -33,13 +133,13 @@ input[type='range'].chassis-fader {
   -webkit-appearance: none;
   appearance: none;
   width: 100%;
-  height: 32px;
+  height: 44px;
   background: transparent;
   cursor: pointer;
 }
 
 input[type='range'].chassis-fader:focus-visible {
-  outline: 2px solid rgba(245, 158, 11, 0.7);
+  outline: 2px solid var(--accent);
   outline-offset: 4px;
   border-radius: 4px;
 }
@@ -49,16 +149,16 @@ input[type='range'].chassis-fader::-webkit-slider-runnable-track {
   border-radius: 2px;
   background: linear-gradient(
     to right,
-    #d1d5db 0%,
-    #d1d5db var(--volume-pct, 50%),
-    #090a0c var(--volume-pct, 50%),
-    #090a0c 100%
+    var(--fader-fill) 0%,
+    var(--fader-fill) var(--volume-pct, 50%),
+    var(--bg-recess) var(--volume-pct, 50%),
+    var(--bg-recess) 100%
   );
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  border: 1px solid var(--border-strong);
 }
 
 input[type='range'].chassis-fader:disabled::-webkit-slider-runnable-track {
-  background: #090a0c;
+  background: var(--bg-recess);
 }
 
 input[type='range'].chassis-fader::-webkit-slider-thumb {
@@ -68,13 +168,13 @@ input[type='range'].chassis-fader::-webkit-slider-thumb {
   height: 28px;
   margin-top: -10px;
   border-radius: 3px;
-  background: #e5e7eb;
-  border: 1px solid #090a0c;
+  background: var(--fader-thumb);
+  border: 1px solid var(--bg-recess);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8), 0 1px 2px rgba(0, 0, 0, 0.8);
 }
 
 input[type='range'].chassis-fader:disabled::-webkit-slider-thumb {
-  background: #4b5563;
+  background: var(--text-disabled);
   cursor: not-allowed;
 }
 
@@ -83,22 +183,22 @@ input[type='range'].chassis-fader::-moz-range-track {
   border-radius: 2px;
   background: linear-gradient(
     to right,
-    #d1d5db 0%,
-    #d1d5db var(--volume-pct, 50%),
-    #090a0c var(--volume-pct, 50%),
-    #090a0c 100%
+    var(--fader-fill) 0%,
+    var(--fader-fill) var(--volume-pct, 50%),
+    var(--bg-recess) var(--volume-pct, 50%),
+    var(--bg-recess) 100%
   );
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  border: 1px solid var(--border-strong);
 }
 
 input[type='range'].chassis-fader:disabled::-moz-range-track {
-  background: #090a0c;
+  background: var(--bg-recess);
 }
 
 input[type='range'].chassis-fader::-moz-range-thumb {
   width: 24px;
   height: 28px;
   border-radius: 3px;
-  background: #e5e7eb;
-  border: 1px solid #090a0c;
+  background: var(--fader-thumb);
+  border: 1px solid var(--bg-recess);
 }
