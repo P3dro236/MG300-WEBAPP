@@ -1,11 +1,11 @@
 import React from 'react';
+import { Settings } from 'lucide-react';
 import type {
-  ConfirmedDeviceState,
   DeviceSyncStatus,
   MidiConnectionState,
-  SentCommandRecord,
 } from '@quicktone/shared';
 import type { WsConnectionStatus } from '../api/client';
+import { BrandLogo } from './BrandLogo';
 import { ConnectionBadge } from './ConnectionBadge';
 
 interface TopBarProps {
@@ -13,8 +13,6 @@ interface TopBarProps {
   connectedPortName: string | null;
   wsStatus: WsConnectionStatus;
   syncStatus: DeviceSyncStatus;
-  confirmedState: ConfirmedDeviceState;
-  lastSentCommand: SentCommandRecord | null;
   hasLoadedInitialState?: boolean;
   isConnectingMidi: boolean;
   onConnectMidi: () => void;
@@ -27,8 +25,6 @@ export const TopBar: React.FC<TopBarProps> = ({
   connectedPortName,
   wsStatus,
   syncStatus,
-  confirmedState,
-  lastSentCommand,
   hasLoadedInitialState = true,
   isConnectingMidi,
   onConnectMidi,
@@ -40,82 +36,51 @@ export const TopBar: React.FC<TopBarProps> = ({
   return (
     <header
       data-testid="top-bar"
-      className="sticky top-0 z-30 border-b border-white/[0.08] bg-[#0D0E10]/95 backdrop-blur-sm"
+      className="sticky top-0 z-[var(--z-sticky)] border-b border-border-subtle bg-bg-base/95 backdrop-blur-sm"
     >
-      <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-2 px-3 py-2.5 sm:px-5">
-        <div className="flex items-center gap-2.5">
-          <svg
-            aria-hidden="true"
-            width="20"
-            height="20"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            className="shrink-0 text-[#F59E0B]"
-          >
-            <rect x="3" y="4" width="18" height="16" rx="2" />
-            <circle cx="8" cy="14" r="1.5" />
-            <circle cx="16" cy="14" r="1.5" />
-            <line x1="7" y1="8.5" x2="17" y2="8.5" />
-          </svg>
-          <div className="flex items-baseline gap-2">
-            <span className="font-sans text-sm font-bold tracking-[0.08em] text-[#F3F4F6]">
-              QUICKTONE
-            </span>
-            <span className="font-mono text-[11px] text-[#8E95A2]">NUX MG-300</span>
-          </div>
+      <div className="mx-auto flex min-h-14 max-w-6xl flex-wrap items-center justify-between gap-2 px-4 py-2 sm:px-6">
+        <div className="flex items-center gap-3">
+          <BrandLogo size="sm" />
         </div>
 
-        <div className="order-3 w-full lg:order-2 lg:w-auto">
+        <div className="order-3 w-full md:order-2 md:w-auto">
           <ConnectionBadge
             connectionState={connectionState}
             connectedPortName={connectedPortName}
             wsStatus={wsStatus}
             syncStatus={syncStatus}
-            confirmedState={confirmedState}
-            lastSentCommand={lastSentCommand}
             hasLoadedInitialState={hasLoadedInitialState}
           />
         </div>
 
-        <div className="order-2 flex items-center gap-2 lg:order-3">
+        <div className="order-2 flex items-center gap-2 md:order-3">
           <button
             type="button"
             data-testid="midi-toggle-btn"
             onClick={isConnected ? onDisconnectMidi : onConnectMidi}
             disabled={isConnectingMidi}
-            className={`inline-flex min-h-[44px] items-center rounded border px-3 font-mono text-xs font-medium transition-colors duration-150 sm:min-h-[38px] ${
+            className={`inline-flex min-h-[44px] items-center rounded-[var(--radius-md)] border px-3 font-sans text-xs font-medium transition-colors duration-150 lg:min-h-[38px] cursor-pointer ${
               isConnected
-                ? 'border-white/15 bg-[#1B1E24] text-[#F3F4F6] hover:border-white/25'
-                : 'border-[#F59E0B]/50 bg-[#1B1E24] text-[#F59E0B] hover:border-[#F59E0B]'
+                ? 'border-border-strong bg-bg-elevated text-text-primary hover:border-border-hover'
+                : 'border-accent-border bg-bg-elevated text-accent hover:border-accent'
             } disabled:opacity-50`}
           >
-            {isConnected ? 'Desconectar' : isConnectingMidi ? 'Conectando...' : 'Conectar MIDI'}
+            {isConnected
+              ? 'Desconectar'
+              : isConnectingMidi
+                ? 'Conectando…'
+                : 'Conectar pedaleira'}
           </button>
 
           <button
             type="button"
             data-testid="open-settings-btn"
-            aria-label="Abrir configurações"
+            aria-label="Configurações"
             onClick={onOpenSettings}
-            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center gap-1.5 rounded border border-white/10 bg-[#14161A] px-2.5 font-mono text-xs text-[#F3F4F6] transition-colors duration-150 hover:border-white/25 hover:bg-[#1B1E24] sm:min-h-[38px] sm:min-w-[38px]"
+            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center gap-1.5 rounded-[var(--radius-md)] border border-border-subtle bg-bg-surface px-2.5 font-sans text-xs font-medium text-text-primary transition-colors duration-150 hover:border-border-hover hover:bg-bg-elevated lg:min-h-[38px] lg:min-w-[38px] cursor-pointer"
           >
-            <svg
-              aria-hidden="true"
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <circle cx="12" cy="12" r="3" />
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9c.26.6.77 1 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-            </svg>
-            <span className="hidden sm:inline">Ajustes</span>
+            <Settings className="h-4 w-4 text-text-muted" strokeWidth={1.75} aria-hidden="true" />
+            <span className="hidden sm:inline">Configurações</span>
           </button>
         </div>
       </div>

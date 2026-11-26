@@ -34,9 +34,9 @@ export const DesktopPairingBanner: React.FC<DesktopPairingBannerProps> = ({
     <section
       data-testid="desktop-pairing-banner"
       aria-label="Solicitações de pareamento mobile"
-      className="flex flex-col gap-2 rounded-md border border-[#F59E0B]/45 bg-[#1B1710] p-3.5"
+      className="flex flex-col gap-3 rounded-[var(--radius-md)] border border-status-warning-border bg-status-warning-bg p-4"
     >
-      {pendingRequests.map((req) => {
+      {pendingRequests.map((req, index) => {
         const isBusy = busyIds.has(req.requestId);
         return (
           <div
@@ -46,14 +46,14 @@ export const DesktopPairingBanner: React.FC<DesktopPairingBannerProps> = ({
           >
             <div className="flex flex-col gap-1">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="font-mono text-[11px] font-semibold uppercase tracking-wider text-[#F59E0B]">
+                <span className="font-mono text-[11px] font-semibold uppercase tracking-wider text-status-warning">
                   Solicitação de Acesso Mobile
                 </span>
-                <span className="rounded border border-white/10 bg-[#090A0C] px-2 py-0.5 font-mono text-xs font-bold tracking-widest text-[#F3F4F6] tabular-nums">
+                <span className="rounded-[var(--radius-sm)] border border-border-subtle bg-bg-recess px-2 py-0.5 font-mono text-xs font-bold tracking-widest text-text-primary tabular-nums">
                   {req.verificationCode}
                 </span>
               </div>
-              <p className="font-sans text-xs text-[#F3F4F6]">
+              <p className="font-sans text-xs text-text-primary">
                 <strong>{req.deviceName}</strong> ({req.remoteIp}) deseja controlar a MG-300.
                 Ao autorizar, qualquer outro celular conectado será desconectado.
               </p>
@@ -62,19 +62,19 @@ export const DesktopPairingBanner: React.FC<DesktopPairingBannerProps> = ({
             <div className="flex shrink-0 items-center gap-2">
               <button
                 type="button"
-                data-testid="reject-pairing-btn"
+                data-testid={index === 0 ? 'reject-pairing-btn' : `reject-pairing-btn-${req.requestId}`}
                 disabled={isBusy}
                 onClick={() => runDecision(req.requestId, onReject)}
-                className="min-h-[44px] rounded border border-white/15 bg-[#090A0C] px-3.5 font-mono text-xs text-[#8E95A2] transition-colors duration-150 hover:border-white/30 hover:text-[#F3F4F6] disabled:opacity-40"
+                className="min-h-[44px] rounded-[var(--radius-md)] border border-border-strong bg-bg-recess px-3.5 font-sans text-xs font-medium text-text-muted transition-colors duration-150 hover:border-border-hover hover:text-text-primary disabled:opacity-40 cursor-pointer"
               >
                 Recusar
               </button>
               <button
                 type="button"
-                data-testid="approve-pairing-btn"
+                data-testid={index === 0 ? 'approve-pairing-btn' : `approve-pairing-btn-${req.requestId}`}
                 disabled={isBusy}
                 onClick={() => runDecision(req.requestId, onApprove)}
-                className="min-h-[44px] rounded border border-[#22C55E]/60 bg-[#141A16] px-4 font-mono text-xs font-semibold text-[#22C55E] transition-colors duration-150 hover:border-[#22C55E] disabled:opacity-40"
+                className="min-h-[44px] rounded-[var(--radius-md)] border border-status-confirmed-border bg-status-confirmed-bg px-4 font-sans text-xs font-semibold text-status-confirmed transition-colors duration-150 hover:border-status-confirmed disabled:opacity-40 cursor-pointer"
               >
                 Autorizar Celular
               </button>

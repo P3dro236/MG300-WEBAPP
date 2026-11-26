@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import { RefreshCw } from 'lucide-react';
 import {
   type ConfirmedDeviceState,
   type Preset,
@@ -26,9 +27,10 @@ interface PresetGridProps {
   isReloadingPresets?: boolean;
   onSelectPreset: (preset: Preset) => void;
   onReloadPresets?: () => void;
+  searchInputRef?: React.RefObject<HTMLInputElement | null>;
 }
 
-export const PresetGrid: React.FC<PresetGridProps> = ({
+const PresetGridInner: React.FC<PresetGridProps> = ({
   presets,
   alreadyFiltered = false,
   filter,
@@ -41,6 +43,7 @@ export const PresetGrid: React.FC<PresetGridProps> = ({
   isReloadingPresets = false,
   onSelectPreset,
   onReloadPresets,
+  searchInputRef,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -80,23 +83,27 @@ export const PresetGrid: React.FC<PresetGridProps> = ({
     [filteredPresets],
   );
 
+  const effectiveViewMode: PresetViewMode =
+    searchQuery.trim().length > 0 ? 'matrix' : viewMode;
+
   return (
     <section
       data-testid="preset-grid"
-      aria-label="Seleção de presets MG-300"
-      className="rounded-md border border-white/[0.08] bg-[#14161A] p-3.5 sm:p-4"
+      aria-label="Seleção de timbres MG-300"
+      className="surface-card p-4"
     >
       <div className="flex flex-col gap-3">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/[0.06] pb-3">
-          <div className="flex flex-wrap items-center gap-1.5 font-mono text-xs tabular-nums">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border-subtle pb-3">
+          <div className="flex flex-wrap items-center gap-2 font-mono text-xs tabular-nums">
             <button
               type="button"
               data-testid="filter-tab-user"
+              aria-pressed={filter === 'user'}
               onClick={() => onChangeFilter('user')}
-              className={`min-h-[44px] rounded border px-3 transition-colors duration-150 sm:min-h-[36px] ${
+              className={`min-h-[44px] rounded-[var(--radius-md)] border px-3 transition-colors duration-150 lg:min-h-[38px] cursor-pointer ${
                 filter === 'user'
-                  ? 'border-white/25 bg-[#1B1E24] font-semibold text-[#F3F4F6]'
-                  : 'border-white/[0.06] bg-[#090A0C] text-[#8E95A2] hover:border-white/15 hover:text-[#F3F4F6]'
+                  ? 'border-border-strong bg-bg-elevated font-semibold text-text-primary'
+                  : 'border-border-subtle bg-bg-recess text-text-muted hover:border-border-hover hover:text-text-primary'
               }`}
             >
               Usuário ({userCount})
@@ -105,11 +112,12 @@ export const PresetGrid: React.FC<PresetGridProps> = ({
             <button
               type="button"
               data-testid="filter-tab-factory"
+              aria-pressed={filter === 'factory'}
               onClick={() => onChangeFilter('factory')}
-              className={`min-h-[44px] rounded border px-3 transition-colors duration-150 sm:min-h-[36px] ${
+              className={`min-h-[44px] rounded-[var(--radius-md)] border px-3 transition-colors duration-150 lg:min-h-[38px] cursor-pointer ${
                 filter === 'factory'
-                  ? 'border-white/25 bg-[#1B1E24] font-semibold text-[#F3F4F6]'
-                  : 'border-white/[0.06] bg-[#090A0C] text-[#8E95A2] hover:border-white/15 hover:text-[#F3F4F6]'
+                  ? 'border-border-strong bg-bg-elevated font-semibold text-text-primary'
+                  : 'border-border-subtle bg-bg-recess text-text-muted hover:border-border-hover hover:text-text-primary'
               }`}
             >
               Fábrica ({factoryCount})
@@ -117,43 +125,51 @@ export const PresetGrid: React.FC<PresetGridProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <div className="inline-flex rounded border border-white/[0.08] bg-[#090A0C] p-0.5 font-mono text-[11px]">
+            <div
+              role="group"
+              aria-label="Modo de exibição dos timbres"
+              className="inline-flex rounded-[var(--radius-md)] border border-border-subtle bg-bg-recess p-0.5 font-mono text-[11px]"
+            >
               <button
                 type="button"
                 data-testid="view-mode-stage-btn"
+                aria-pressed={viewMode === 'stage'}
                 onClick={() => onChangeViewMode('stage')}
-                className={`min-h-[40px] rounded-sm px-2.5 transition-colors duration-150 sm:min-h-[32px] ${
+                className={`min-h-[44px] rounded-[var(--radius-sm)] px-3 transition-colors duration-150 lg:min-h-[34px] cursor-pointer ${
                   viewMode === 'stage'
-                    ? 'bg-[#1B1E24] font-semibold text-[#F3F4F6]'
-                    : 'text-[#8E95A2] hover:text-[#F3F4F6]'
+                    ? 'bg-bg-elevated font-semibold text-text-primary'
+                    : 'text-text-muted hover:text-text-primary'
                 }`}
               >
-                Modo palco (A–D)
+                Palco (A–D)
               </button>
               <button
                 type="button"
                 data-testid="view-mode-matrix-btn"
+                aria-pressed={viewMode === 'matrix'}
                 onClick={() => onChangeViewMode('matrix')}
-                className={`min-h-[40px] rounded-sm px-2.5 transition-colors duration-150 sm:min-h-[32px] ${
+                className={`min-h-[44px] rounded-[var(--radius-sm)] px-3 transition-colors duration-150 lg:min-h-[34px] cursor-pointer ${
                   viewMode === 'matrix'
-                    ? 'bg-[#1B1E24] font-semibold text-[#F3F4F6]'
-                    : 'text-[#8E95A2] hover:text-[#F3F4F6]'
+                    ? 'bg-bg-elevated font-semibold text-text-primary'
+                    : 'text-text-muted hover:text-text-primary'
                 }`}
               >
-                Matriz (1–9)
+                Bancos (1–9)
               </button>
             </div>
 
-            {viewMode === 'matrix' ? (
-              <input
-                type="search"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Buscar preset ou banco..."
-                aria-label="Buscar preset"
-                className="min-h-[44px] w-full rounded border border-white/[0.08] bg-[#090A0C] px-2.5 font-mono text-xs text-[#F3F4F6] placeholder:text-[#525866] focus:border-white/25 focus:outline-none sm:min-h-[34px] sm:w-48"
-              />
-            ) : null}
+            <input
+              ref={searchInputRef}
+              type="search"
+              name="preset-search"
+              autoComplete="off"
+              spellCheck={false}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Buscar timbre ou slot…"
+              aria-label="Buscar timbre"
+              className="min-h-[44px] w-full rounded-[var(--radius-md)] border border-border-subtle bg-bg-recess px-3 font-mono text-xs text-text-primary placeholder:text-text-dim sm:w-48 lg:min-h-[38px]"
+            />
 
             {onReloadPresets ? (
               <button
@@ -161,38 +177,27 @@ export const PresetGrid: React.FC<PresetGridProps> = ({
                 data-testid="reload-presets-btn"
                 disabled={isReloadingPresets}
                 onClick={onReloadPresets}
-                aria-label="Sincronizar presets da pedaleira"
-                className="inline-flex min-h-[44px] items-center gap-1.5 rounded border border-white/[0.08] bg-[#090A0C] px-2.5 font-mono text-[11px] text-[#F3F4F6] transition-colors duration-150 hover:border-white/25 hover:bg-[#1B1E24] disabled:opacity-50 sm:min-h-[34px]"
+                aria-label="Sincronizar timbres da pedaleira"
+                className="inline-flex min-h-[44px] items-center gap-1.5 rounded-[var(--radius-md)] border border-border-subtle bg-bg-recess px-3 font-sans text-xs font-medium text-text-primary transition-colors duration-150 hover:border-border-hover hover:bg-bg-elevated disabled:opacity-50 lg:min-h-[38px] cursor-pointer"
               >
-                <svg
+                <RefreshCw
+                  className={`h-3.5 w-3.5 text-text-muted ${isReloadingPresets ? 'animate-spin' : ''}`}
+                  strokeWidth={1.75}
                   aria-hidden="true"
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-                  <path d="M3 3v5h5" />
-                  <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
-                  <path d="M16 16h5v5" />
-                </svg>
-                <span>{isReloadingPresets ? 'Sincronizando...' : 'Sincronizar'}</span>
+                />
+                <span>{isReloadingPresets ? 'Sincronizando…' : 'Sincronizar'}</span>
               </button>
             ) : null}
           </div>
         </div>
 
         {filteredPresets.length === 0 ? (
-          <div className="rounded border border-white/[0.06] bg-[#090A0C] p-6 text-center font-mono text-xs text-[#8E95A2]">
+          <div className="rounded-[var(--radius-md)] border border-border-subtle bg-bg-recess p-6 text-center font-mono text-xs text-text-muted">
             {filter === 'user'
-              ? 'Nenhum preset de usuário carregado. Conecte a MG-300 para sincronizar os timbres salvos.'
-              : 'Nenhum preset de fábrica encontrado neste filtro.'}
+              ? 'Nenhum timbre de usuário carregado. Conecte a MG-300 para sincronizar.'
+              : 'Nenhum timbre de fábrica encontrado neste filtro.'}
           </div>
-        ) : viewMode === 'stage' ? (
+        ) : effectiveViewMode === 'stage' ? (
           <StageFootswitchDeck
             presets={filteredPresets}
             confirmedState={confirmedState}
@@ -201,18 +206,18 @@ export const PresetGrid: React.FC<PresetGridProps> = ({
             onSelectPreset={onSelectPreset}
           />
         ) : (
-          <div className="flex flex-col gap-2.5">
+          <div className="flex flex-col divide-y divide-border-subtle rounded-[var(--radius-md)] border border-border-subtle bg-bg-recess">
             {groupedBanks.map((group) => (
               <div
                 key={group.key}
-                className="flex flex-col gap-1.5 rounded border border-white/[0.06] bg-[#090A0C] p-2 sm:flex-row sm:items-stretch sm:gap-3"
+                className="flex flex-col gap-2 p-2.5 sm:flex-row sm:items-stretch sm:gap-3"
               >
-                <div className="flex items-center justify-between px-1 font-mono text-[11px] font-semibold tracking-wider text-[#8E95A2] tabular-nums sm:w-28 sm:shrink-0 sm:flex-col sm:items-start sm:justify-center sm:border-r sm:border-white/[0.06] sm:pr-2">
+                <div className="flex items-center justify-between px-1 font-mono text-[11px] font-semibold tracking-wider text-text-muted tabular-nums sm:w-28 sm:shrink-0 sm:flex-col sm:items-start sm:justify-center sm:border-r sm:border-border-subtle sm:pr-2">
                   <span>{group.label.toUpperCase()}</span>
-                  <span className="text-[10px] text-[#525866]">{group.key}A–{group.key}D</span>
+                  <span className="text-[11px] text-text-dim">{group.key}A–{group.key}D</span>
                 </div>
 
-                <div className="grid flex-1 grid-cols-2 gap-1.5 sm:grid-cols-4">
+                <div className="grid flex-1 grid-cols-2 gap-2 sm:grid-cols-4">
                   {group.items.map((preset) => (
                     <PresetCard
                       key={preset.id}
@@ -232,3 +237,5 @@ export const PresetGrid: React.FC<PresetGridProps> = ({
     </section>
   );
 };
+
+export const PresetGrid = React.memo(PresetGridInner);

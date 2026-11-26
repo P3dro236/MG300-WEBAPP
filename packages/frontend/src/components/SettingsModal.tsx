@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { X } from 'lucide-react';
 import type {
   MidiPortInfo,
   PairingChallengeInfo,
@@ -6,6 +7,7 @@ import type {
   PendingPairingRequest,
   TrustedDeviceInfo,
 } from '@quicktone/shared';
+import { useFocusTrap } from '../hooks/useFocusTrap';
 import { QrCodeSvg } from './QrCodeSvg';
 
 interface SettingsModalProps {
@@ -58,9 +60,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   );
   const [generatingQr, setGeneratingQr] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [busyAction, setBusyAction] = useState<string | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const wasOpenRef = useRef(false);
+
+  useFocusTrap(dialogRef, isOpen, onClose);
 
   useEffect(() => {
-    setSelectedPort(connectedPortName ?? availablePorts[0]?.name ?? '');
+    const justOpened = isOpen && !wasOpenRef.current;
+    wasOpenRef.current = isOpen;
+    if (!isOpen) return;
+    setSelectedPort((prev) => {
+      const prevStillAvailable = Boolean(prev) && availablePorts.some((p) => p.name === prev);
+      if (!justOpened && prevStillAvailable) {
+        return prev;
+      }
+      return connectedPortName ?? availablePorts[0]?.name ?? '';
+    });
   }, [connectedPortName, availablePorts, isOpen]);
 
   useEffect(() => {
@@ -71,19 +87,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     const id = setInterval(() => setNowMs(Date.now()), 1000);
     return () => clearInterval(id);
   }, [isOpen, activeChallenge]);
-
-  const [busyAction, setBusyAction] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') {
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
 
   const runAction = async (key: string, fn: () => Promise<void> | void): Promise<void> => {
     if (busyAction !== null) return;
@@ -114,54 +117,75 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   return (
     <div
       data-testid="settings-modal"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Configurações do controlador"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-3 sm:p-5"
+      className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-bg-scrim p-4"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) {
+          onClose();
+        }
+      }}
     >
-      <div className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-md border border-white/15 bg-[#14161A] p-4 sm:p-5">
-        <div className="flex items-center justify-between border-b border-white/[0.08] pb-3">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-modal-title"
+        tabIndex={-1}
+        className="max-h-[90vh] w-full max-w-2xl overflow-y-auto overscroll-contain rounded-[var(--radius-lg)] border border-border-strong bg-bg-surface p-4 shadow-[var(--shadow-modal)] sm:p-6"
+      >
+        <div className="flex items-center justify-between gap-3 border-b border-border-subtle pb-4">
           <div>
-            <h2 className="font-sans text-base font-semibold text-[#F3F4F6]">
+            <h2
+              id="settings-modal-title"
+              className="font-sans text-base font-semibold text-text-primary sm:text-lg"
+            >
               Configurações de Conexão e Acesso
             </h2>
-            <p className="font-mono text-[11px] text-[#8E95A2]">
-              NUX MG-300 · Controle Master &amp; Rede Local
+            <p className="font-mono text-[11px] text-text-muted">
+              NUX MG-300 · Porta MIDI &amp; Rede Local
             </p>
           </div>
 
           <button
             type="button"
             data-testid="close-settings-btn"
+            aria-label="Fechar configurações"
             onClick={onClose}
-            className="min-h-[44px] rounded border border-white/10 bg-[#1B1E24] px-3 font-mono text-xs text-[#F3F4F6] hover:border-white/25 sm:min-h-[36px]"
+            className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-[var(--radius-md)] border border-border-subtle bg-bg-elevated px-3 font-sans text-xs font-medium text-text-primary transition-colors duration-150 hover:border-border-hover lg:min-h-[38px] cursor-pointer"
           >
-            Fechar
+            <X className="h-4 w-4 sm:hidden" strokeWidth={1.75} aria-hidden="true" />
+            <span className="hidden sm:inline">Fechar</span>
           </button>
         </div>
 
-        <div className="mt-4 flex flex-col gap-5">
+        <div className="mt-5 flex flex-col gap-6">
           {/* Porta MIDI */}
           <div className="flex flex-col gap-2">
             <label
               htmlFor="midi-port-select"
-              className="font-mono text-xs font-semibold uppercase tracking-wider text-[#8E95A2]"
+              className="font-mono text-xs font-semibold uppercase tracking-wider text-text-muted"
             >
               Porta MIDI
             </label>
             <div className="flex flex-col gap-2 sm:flex-row">
               <select
                 id="midi-port-select"
+                name="midi-port"
                 data-testid="midi-port-select"
                 value={selectedPort}
                 onChange={(e) => setSelectedPort(e.target.value)}
-                className="min-h-[40px] flex-1 rounded border border-white/10 bg-[#090A0C] px-2.5 font-mono text-xs text-[#F3F4F6] focus:border-white/25 focus:outline-none"
+                className="min-h-[44px] flex-1 rounded-[var(--radius-md)] border border-border-strong bg-bg-recess px-3 font-mono text-xs text-text-primary"
               >
                 {availablePorts.length === 0 ? (
-                  <option value="">Nenhuma porta MIDI detectada</option>
+                  <option value="" className="bg-bg-surface text-text-primary">
+                    Nenhuma porta MIDI detectada
+                  </option>
                 ) : (
                   availablePorts.map((port) => (
-                    <option key={port.id} value={port.name}>
+                    <option
+                      key={port.id}
+                      value={port.name}
+                      className="bg-bg-surface text-text-primary"
+                    >
                       {port.name} ({port.direction.toUpperCase()}
                       {port.isMg300 ? ' · MG-300' : ''})
                     </option>
@@ -176,9 +200,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 onClick={() => {
                   if (selectedPort) onConnectMidiPort(selectedPort);
                 }}
-                className="min-h-[40px] rounded border border-white/15 bg-[#1B1E24] px-4 font-mono text-xs font-semibold text-[#F3F4F6] hover:border-white/30 disabled:opacity-40"
+                className="min-h-[44px] rounded-[var(--radius-md)] border border-border-strong bg-bg-elevated px-4 font-sans text-xs font-semibold text-text-primary transition-colors duration-150 hover:border-border-hover disabled:opacity-40 cursor-pointer"
               >
-                Conectar Porta
+                Conectar porta
               </button>
             </div>
           </div>
@@ -187,16 +211,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           {isLocalDesktop ? (
             <div
               data-testid="lan-qr-card"
-              className="flex flex-col gap-3 rounded border border-white/[0.08] bg-[#090A0C] p-3.5"
+              className="flex flex-col gap-4 border-t border-border-subtle pt-5"
             >
-              <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <span className="font-mono text-xs font-semibold uppercase tracking-wider text-[#F3F4F6]">
+                  <span className="font-mono text-xs font-semibold uppercase tracking-wider text-text-primary">
                     Pareamento de Celular via QR Code
                   </span>
-                  <p className="mt-0.5 font-sans text-xs text-[#8E95A2]">
-                    Apenas um celular autorizado por vez pode controlar a pedaleira na rede
-                    Wi-Fi.
+                  <p className="mt-1 font-sans text-xs text-text-muted">
+                    Apenas um celular autorizado por vez pode controlar a pedaleira na rede Wi-Fi.
                   </p>
                 </div>
 
@@ -205,12 +228,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   data-testid="generate-pairing-qr-btn"
                   disabled={generatingQr}
                   onClick={() => void handleGenerateQr()}
-                  className="min-h-[40px] shrink-0 rounded border border-[#F59E0B]/50 bg-[#1B1E24] px-3.5 font-mono text-xs font-semibold text-[#F59E0B] hover:border-[#F59E0B] disabled:opacity-50"
+                  className="min-h-[44px] shrink-0 rounded-[var(--radius-md)] border border-accent-border bg-bg-elevated px-3.5 font-sans text-xs font-semibold text-accent transition-colors duration-150 hover:border-accent disabled:opacity-50 cursor-pointer"
                 >
                   {generatingQr
-                    ? 'Gerando...'
+                    ? 'Gerando…'
                     : activeChallenge && !challengeExpired
-                      ? 'Gerar Novo QR Code'
+                      ? 'Gerar novo QR Code'
                       : 'Gerar QR Code'}
                 </button>
               </div>
@@ -218,23 +241,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               {activeChallenge && !challengeExpired ? (
                 <div
                   data-testid="pairing-challenge-box"
-                  className="flex flex-col items-center gap-4 rounded border border-white/[0.06] bg-[#14161A] p-3.5 sm:flex-row sm:items-center sm:justify-between"
+                  className="flex flex-col items-center gap-4 rounded-[var(--radius-md)] border border-border-subtle bg-bg-recess p-4 sm:flex-row sm:items-center sm:justify-between"
                 >
-                  <div className="flex flex-col gap-1.5">
-                    <span className="font-mono text-[11px] font-semibold uppercase tracking-wider text-[#F59E0B]">
+                  <div className="flex flex-col gap-2">
+                    <span className="font-mono text-[11px] font-semibold uppercase tracking-wider text-accent tabular-nums">
                       QR Code temporário ({remainingSeconds}s)
                     </span>
-                    <p className="font-sans text-xs leading-relaxed text-[#8E95A2]">
-                      Aponte a câmera do celular conectado ao mesmo Wi-Fi. Após o scan,
-                      confirme a autorização aqui no computador.
+                    <p className="font-sans text-xs leading-relaxed text-text-muted">
+                      Aponte a câmera do celular conectado ao mesmo Wi-Fi. Após ler o QR Code,
+                      autorize a conexão aqui no computador.
                     </p>
                     {lanUrls.length > 0 ? (
-                      <div className="mt-1 flex flex-col gap-1">
+                      <div className="flex flex-col gap-1">
                         {lanUrls.map((url) => (
                           <code
                             key={url}
                             data-testid="lan-url-item"
-                            className="rounded border border-white/[0.06] bg-[#090A0C] px-2 py-1 font-mono text-[11px] text-[#8E95A2]"
+                            className="rounded-[var(--radius-sm)] border border-border-subtle bg-bg-surface px-2.5 py-1 font-mono text-[11px] text-text-muted break-all"
                           >
                             {url}
                           </code>
@@ -248,27 +271,27 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
                 </div>
               ) : (
-                <div className="rounded border border-white/[0.06] bg-[#14161A] p-3 font-sans text-xs text-[#8E95A2]">
-                  Clique em <strong className="text-[#F3F4F6]">Gerar QR Code</strong>{' '}
-                  para liberar um pareamento temporário de uso único.
-                </div>
+                <p className="font-sans text-xs text-text-muted">
+                  Clique em <strong className="text-text-primary">Gerar QR Code</strong> para
+                  liberar um pareamento temporário de uso único.
+                </p>
               )}
 
               {pendingRequests.length > 0 ? (
-                <div className="flex flex-col gap-2 border-t border-white/[0.06] pt-3">
-                  <span className="font-mono text-[11px] font-semibold uppercase tracking-wider text-[#F59E0B]">
+                <div className="flex flex-col gap-2 border-t border-border-subtle pt-4">
+                  <span className="font-mono text-[11px] font-semibold uppercase tracking-wider text-status-warning">
                     Aguardando Autorização
                   </span>
                   {pendingRequests.map((req) => (
                     <div
                       key={req.requestId}
-                      className="flex flex-wrap items-center justify-between gap-2 rounded border border-[#F59E0B]/40 bg-[#1B1710] p-2.5"
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-[var(--radius-md)] border border-status-warning-border bg-status-warning-bg p-3"
                     >
                       <div className="flex items-center gap-2.5">
-                        <span className="rounded border border-white/10 bg-[#090A0C] px-2 py-0.5 font-mono text-xs font-bold text-[#F3F4F6] tabular-nums">
+                        <span className="rounded-[var(--radius-sm)] border border-border-subtle bg-bg-recess px-2 py-0.5 font-mono text-xs font-bold text-text-primary tabular-nums">
                           {req.verificationCode}
                         </span>
-                        <span className="font-sans text-xs text-[#F3F4F6]">
+                        <span className="font-sans text-xs text-text-primary">
                           {req.deviceName} ({req.remoteIp})
                         </span>
                       </div>
@@ -281,7 +304,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                               onRejectPairing(req.requestId),
                             )
                           }
-                          className="min-h-[44px] rounded border border-white/15 bg-[#090A0C] px-3 font-mono text-xs text-[#8E95A2] hover:text-[#F3F4F6] disabled:opacity-40 sm:min-h-[36px]"
+                          className="min-h-[44px] rounded-[var(--radius-md)] border border-border-strong bg-bg-recess px-3 font-sans text-xs text-text-muted transition-colors hover:text-text-primary disabled:opacity-40 lg:min-h-[36px] cursor-pointer"
                         >
                           Recusar
                         </button>
@@ -293,7 +316,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                               onApprovePairing(req.requestId),
                             )
                           }
-                          className="min-h-[44px] rounded border border-[#22C55E]/60 bg-[#141A16] px-3 font-mono text-xs font-semibold text-[#22C55E] disabled:opacity-40 sm:min-h-[36px]"
+                          className="min-h-[44px] rounded-[var(--radius-md)] border border-status-confirmed-border bg-status-confirmed-bg px-3 font-sans text-xs font-semibold text-status-confirmed disabled:opacity-40 lg:min-h-[36px] cursor-pointer"
                         >
                           Autorizar
                         </button>
@@ -303,17 +326,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </div>
               ) : null}
 
-              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/[0.06] pt-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border-subtle pt-4">
                 {activeSession ? (
                   <>
                     <div
                       data-testid="active-mobile-session"
                       className="flex flex-col gap-0.5"
                     >
-                      <span className="font-mono text-[11px] font-semibold text-[#22C55E]">
+                      <span className="font-mono text-[11px] font-semibold text-status-confirmed">
                         CELULAR CONTROLADOR ATIVO
                       </span>
-                      <span className="font-sans text-xs text-[#F3F4F6]">
+                      <span className="font-sans text-xs text-text-primary">
                         {activeSession.deviceName} ({activeSession.remoteIp})
                       </span>
                     </div>
@@ -322,13 +345,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       data-testid="revoke-mobile-btn"
                       disabled={busyAction !== null}
                       onClick={() => void runAction('revoke', onRevokeMobileSession)}
-                      className="min-h-[44px] rounded border border-[#EF4444]/50 bg-[#EF4444]/10 px-3 font-mono text-xs font-semibold text-[#EF4444] hover:border-[#EF4444] disabled:opacity-40 sm:min-h-[38px]"
+                      className="min-h-[44px] rounded-[var(--radius-md)] border border-status-error-border bg-status-error-bg px-3 font-sans text-xs font-semibold text-status-error transition-colors hover:border-status-error disabled:opacity-40 lg:min-h-[38px] cursor-pointer"
                     >
-                      Revogar Acesso
+                      Revogar acesso
                     </button>
                   </>
                 ) : (
-                  <span className="font-sans text-xs text-[#8E95A2]">
+                  <span className="font-sans text-xs text-text-muted">
                     Nenhum celular conectado no momento.
                   </span>
                 )}
@@ -336,40 +359,40 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
               <div
                 data-testid="trusted-devices-section"
-                className="flex flex-col gap-2 border-t border-white/[0.06] pt-3"
+                className="flex flex-col gap-2 border-t border-border-subtle pt-4"
               >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-mono text-[11px] font-semibold uppercase tracking-wider text-[#F3F4F6]">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-mono text-[11px] font-semibold uppercase tracking-wider text-text-primary">
                     Dispositivos Confiáveis ({trustedDevices.length})
                   </span>
-                  <span className="font-mono text-[10px] text-[#8E95A2]">
+                  <span className="font-mono text-[11px] text-text-muted">
                     Reconectam sem novo QR Code
                   </span>
                 </div>
                 {trustedDevices.length === 0 ? (
-                  <span className="font-sans text-xs text-[#8E95A2]">
+                  <span className="font-sans text-xs text-text-muted">
                     Nenhum dispositivo salvo ainda. Aprove um celular via QR Code para salvá-lo.
                   </span>
                 ) : (
-                  <div className="flex flex-col gap-1.5">
+                  <div className="flex flex-col divide-y divide-border-subtle rounded-[var(--radius-md)] border border-border-subtle bg-bg-recess">
                     {trustedDevices.map((dev) => (
                       <div
                         key={dev.deviceId}
                         data-testid={`trusted-device-row-${dev.deviceId}`}
-                        className="flex flex-wrap items-center justify-between gap-2 rounded border border-white/[0.06] bg-[#14161A] px-3 py-2"
+                        className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5"
                       >
                         <div className="flex min-w-0 flex-col gap-0.5">
                           <div className="flex items-center gap-2">
-                            <span className="truncate font-sans text-xs font-medium text-[#F3F4F6]">
+                            <span className="truncate font-sans text-xs font-medium text-text-primary">
                               {dev.deviceName}
                             </span>
                             {dev.isCurrentlyActive ? (
-                              <span className="rounded border border-[#22C55E]/40 bg-[#22C55E]/10 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-[#22C55E]">
+                              <span className="rounded-[var(--radius-sm)] border border-status-confirmed-border bg-status-confirmed-bg px-1.5 py-0.5 font-mono text-[11px] font-semibold text-status-confirmed">
                                 ATIVO
                               </span>
                             ) : null}
                           </div>
-                          <span className="font-mono text-[11px] text-[#8E95A2] tabular-nums">
+                          <span className="font-mono text-[11px] text-text-muted tabular-nums">
                             {dev.remoteIp}
                           </span>
                         </div>
@@ -383,7 +406,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                 onRemoveTrustedDevice(dev.deviceId),
                               )
                             }
-                            className="min-h-[44px] rounded border border-[#EF4444]/40 bg-[#EF4444]/10 px-2.5 font-mono text-[11px] font-semibold text-[#EF4444] transition-colors duration-150 hover:border-[#EF4444] disabled:opacity-40 sm:min-h-[36px]"
+                            className="min-h-[44px] rounded-[var(--radius-md)] border border-status-error-border bg-status-error-bg px-3 font-sans text-xs font-semibold text-status-error transition-colors duration-150 hover:border-status-error disabled:opacity-40 lg:min-h-[36px] cursor-pointer"
                           >
                             Remover
                           </button>
@@ -395,13 +418,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </div>
             </div>
           ) : (
-            <div className="flex flex-col gap-3 rounded border border-white/[0.08] bg-[#090A0C] p-3.5">
-              <span className="font-mono text-xs font-semibold uppercase tracking-wider text-[#F3F4F6]">
+            <div className="flex flex-col gap-3 border-t border-border-subtle pt-5">
+              <span className="font-mono text-xs font-semibold uppercase tracking-wider text-text-primary">
                 Sessão Mobile Autorizada
               </span>
               {activeSession ? (
-                <p className="font-sans text-xs text-[#8E95A2]">
-                  Dispositivo: <strong className="text-[#F3F4F6]">{activeSession.deviceName}</strong>{' '}
+                <p className="font-sans text-xs text-text-muted">
+                  Dispositivo: <strong className="text-text-primary">{activeSession.deviceName}</strong>{' '}
                   ({activeSession.remoteIp})
                 </p>
               ) : null}
@@ -410,9 +433,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 data-testid="logout-mobile-btn"
                 disabled={busyAction !== null}
                 onClick={() => void runAction('logout', onLogoutMobileSession)}
-                className="min-h-[44px] self-start rounded border border-[#EF4444]/50 bg-[#EF4444]/10 px-4 font-mono text-xs font-semibold text-[#EF4444] disabled:opacity-40 sm:min-h-[40px]"
+                className="min-h-[44px] self-start rounded-[var(--radius-md)] border border-status-error-border bg-status-error-bg px-4 font-sans text-xs font-semibold text-status-error transition-colors hover:border-status-error disabled:opacity-40 cursor-pointer"
               >
-                Encerrar Sessão neste Celular
+                Encerrar sessão neste celular
               </button>
             </div>
           )}

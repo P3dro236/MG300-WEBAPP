@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import type {
   ConfirmedDeviceState,
   Preset,
@@ -39,9 +40,7 @@ export const StageFootswitchDeck: React.FC<StageFootswitchDeckProps> = ({
   presetsRef.current = presets;
 
   useEffect(() => {
-    if (!activePresetId) {
-      return;
-    }
+    if (!activePresetId) return;
     const matched = presetsRef.current.find((p) => p.id === activePresetId);
     if (matched) {
       setSelectedBankKey(getPresetBankKey(matched));
@@ -57,7 +56,7 @@ export const StageFootswitchDeck: React.FC<StageFootswitchDeckProps> = ({
 
   if (!currentBank) {
     return (
-      <div className="rounded-md border border-white/[0.08] bg-[#14161A] p-6 text-center font-mono text-xs text-[#8E95A2]">
+      <div className="rounded-[var(--radius-md)] border border-border-subtle bg-bg-recess p-6 text-center font-mono text-xs text-text-muted">
         Nenhum banco disponível no filtro atual.
       </div>
     );
@@ -77,35 +76,25 @@ export const StageFootswitchDeck: React.FC<StageFootswitchDeckProps> = ({
 
   return (
     <div data-testid="stage-footswitch-deck" className="flex flex-col gap-3">
-      <div className="flex items-center justify-between gap-2 rounded border border-white/[0.08] bg-[#090A0C] p-1.5">
+      <div className="flex items-center justify-between gap-2 rounded-[var(--radius-md)] border border-border-subtle bg-bg-recess p-1.5">
         <button
           type="button"
           data-testid="stage-bank-prev-btn"
           aria-label="Banco anterior"
           onClick={goPrev}
-          className="inline-flex min-h-[44px] min-w-[56px] items-center justify-center rounded border border-white/10 bg-[#1B1E24] px-3 font-mono text-sm font-semibold text-[#F3F4F6] transition-colors duration-150 hover:border-white/25"
+          className="inline-flex min-h-[44px] min-w-[52px] items-center justify-center rounded-[var(--radius-sm)] border border-border-strong bg-bg-elevated px-3 text-text-primary transition-colors duration-150 hover:border-border-hover cursor-pointer"
         >
-          <svg
-            aria-hidden="true"
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.5"
-          >
-            <polyline points="15 18 9 12 15 6" />
-          </svg>
+          <ChevronLeft className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
         </button>
 
         <div className="flex flex-col items-center">
           <span
             data-testid="stage-bank-label"
-            className="font-mono text-sm font-bold tracking-wider text-[#F3F4F6] tabular-nums"
+            className="font-mono text-sm font-bold tracking-wider text-text-primary tabular-nums"
           >
             {currentBank.label.toUpperCase()} ({currentBank.key}A–{currentBank.key}D)
           </span>
-          <span className="font-mono text-[10px] text-[#8E95A2] tabular-nums">
+          <span className="font-mono text-[11px] text-text-muted tabular-nums">
             {currentIdx + 1} / {banks.length}
           </span>
         </div>
@@ -115,21 +104,39 @@ export const StageFootswitchDeck: React.FC<StageFootswitchDeckProps> = ({
           data-testid="stage-bank-next-btn"
           aria-label="Próximo banco"
           onClick={goNext}
-          className="inline-flex min-h-[44px] min-w-[56px] items-center justify-center rounded border border-white/10 bg-[#1B1E24] px-3 font-mono text-sm font-semibold text-[#F3F4F6] transition-colors duration-150 hover:border-white/25"
+          className="inline-flex min-h-[44px] min-w-[52px] items-center justify-center rounded-[var(--radius-sm)] border border-border-strong bg-bg-elevated px-3 text-text-primary transition-colors duration-150 hover:border-border-hover cursor-pointer"
         >
-          <svg
-            aria-hidden="true"
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.5"
-          >
-            <polyline points="9 18 15 12 9 6" />
-          </svg>
+          <ChevronRight className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
         </button>
       </div>
+
+      {banks.length > 1 ? (
+        <div
+          role="group"
+          aria-label="Salto rápido de banco"
+          className="flex flex-wrap items-center justify-center gap-1.5"
+        >
+          {banks.map((bank) => {
+            const isCurrent = bank.key === currentBank.key;
+            return (
+              <button
+                key={bank.key}
+                type="button"
+                data-testid={`stage-bank-jump-${bank.key}`}
+                aria-pressed={isCurrent}
+                onClick={() => setSelectedBankKey(bank.key)}
+                className={`min-h-[44px] min-w-[44px] rounded-[var(--radius-sm)] border px-2 font-mono text-xs font-semibold tabular-nums transition-colors duration-150 lg:min-h-[34px] lg:min-w-[36px] cursor-pointer ${
+                  isCurrent
+                    ? 'border-accent-border bg-accent-soft text-accent'
+                    : 'border-border-subtle bg-bg-recess text-text-muted hover:border-border-hover hover:text-text-primary'
+                }`}
+              >
+                {bank.key}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
 
       <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
         {currentBank.items.map((preset) => (

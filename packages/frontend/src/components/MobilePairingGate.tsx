@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { QrCode } from 'lucide-react';
 import type { PairingSessionStatus } from '@quicktone/shared';
 
 interface MobilePairingGateProps {
@@ -101,8 +102,6 @@ export const MobilePairingGate: React.FC<MobilePairingGateProps> = ({
     }>;
   } | null>(null);
 
-  // Automatically submit pairing request when opened via QR Code URL (?pair=...)
-  // Reusing the in-flight promise by code keeps StrictMode double-mount from consuming a single-use code twice.
   useEffect(() => {
     if (!initialPairingCode) {
       return;
@@ -135,11 +134,7 @@ export const MobilePairingGate: React.FC<MobilePairingGateProps> = ({
       .catch((err: unknown) => {
         if (!active) return;
         const code = (err as { code?: string }).code;
-        if (code === 'RATE_LIMITED') {
-          setPhase('rate_limited');
-        } else {
-          setPhase('error');
-        }
+        setPhase(code === 'RATE_LIMITED' ? 'rate_limited' : 'error');
         setErrorMessage(
           err instanceof Error
             ? err.message
@@ -152,7 +147,6 @@ export const MobilePairingGate: React.FC<MobilePairingGateProps> = ({
     };
   }, [initialPairingCode, onRequestPairing]);
 
-  // Poll desktop approval status while waiting
   useEffect(() => {
     if (phase !== 'waiting_approval' || !pendingCredentials) {
       return;
@@ -195,30 +189,16 @@ export const MobilePairingGate: React.FC<MobilePairingGateProps> = ({
   return (
     <div
       data-testid="mobile-pairing-gate"
-      className="flex min-h-screen flex-col items-center justify-center bg-[#0D0E10] px-4 py-8 text-[#F3F4F6]"
+      className="flex min-h-screen flex-col items-center justify-center bg-bg-base px-4 py-8 text-text-primary"
     >
-      <div className="w-full max-w-md rounded-md border border-white/10 bg-[#14161A] p-5 sm:p-6">
-        <div className="flex items-center gap-3 border-b border-white/[0.08] pb-4">
-          <svg
-            aria-hidden="true"
-            width="22"
-            height="22"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            className="shrink-0 text-[#F59E0B]"
-          >
-            <rect x="3" y="3" width="7" height="7" rx="1" />
-            <rect x="14" y="3" width="7" height="7" rx="1" />
-            <rect x="3" y="14" width="7" height="7" rx="1" />
-            <path d="M14 14h3v3h-3zM18 17h3v4h-4v-3" />
-          </svg>
+      <div className="surface-card w-full max-w-md p-6">
+        <div className="flex items-center gap-3 border-b border-border-subtle pb-4">
+          <QrCode className="h-5 w-5 shrink-0 text-accent" strokeWidth={1.75} aria-hidden="true" />
           <div>
-            <h1 className="font-sans text-base font-semibold text-[#F3F4F6]">
+            <h1 className="font-sans text-base font-semibold text-text-primary">
               Pareamento Obrigatório — NUX MG-300
             </h1>
-            <p className="font-sans text-xs text-[#8E95A2]">
+            <p className="font-sans text-xs text-text-muted">
               Apenas um celular autorizado pode controlar a pedaleira por vez.
             </p>
           </div>
@@ -228,12 +208,12 @@ export const MobilePairingGate: React.FC<MobilePairingGateProps> = ({
           {isTrustedDevice && onTrustedReconnect && phase === 'unpaired' ? (
             <div
               data-testid="trusted-device-reconnect-card"
-              className="flex flex-col gap-2.5 rounded border border-[#22C55E]/40 bg-[#141A16] p-4"
+              className="flex flex-col gap-2.5 rounded-[var(--radius-md)] border border-status-confirmed-border bg-status-confirmed-bg p-4"
             >
-              <span className="font-mono text-[11px] font-semibold uppercase tracking-wider text-[#22C55E]">
+              <span className="font-mono text-[11px] font-semibold uppercase tracking-wider text-status-confirmed">
                 Dispositivo Confiável Reconhecido
               </span>
-              <p className="font-sans text-xs text-[#F3F4F6]">
+              <p className="font-sans text-xs text-text-primary">
                 {trustedDeviceName ? `${trustedDeviceName} já está` : 'Este aparelho já está'}{' '}
                 na lista de dispositivos confiáveis. Reconecte sem ler o QR Code.
               </p>
@@ -254,10 +234,10 @@ export const MobilePairingGate: React.FC<MobilePairingGateProps> = ({
                     })
                     .finally(() => setReconnectingTrusted(false));
                 }}
-                className="min-h-[44px] rounded border border-[#22C55E]/60 bg-[#090A0C] px-4 font-mono text-xs font-semibold text-[#22C55E] transition-colors duration-150 hover:border-[#22C55E] disabled:opacity-50"
+                className="min-h-[44px] rounded-[var(--radius-md)] border border-status-confirmed-border bg-bg-recess px-4 font-sans text-xs font-semibold text-status-confirmed transition-colors duration-150 hover:border-status-confirmed disabled:opacity-50 cursor-pointer"
               >
                 {reconnectingTrusted
-                  ? 'Reconectando...'
+                  ? 'Reconectando…'
                   : 'Reconectar (Dispositivo Confiável)'}
               </button>
             </div>
@@ -266,7 +246,7 @@ export const MobilePairingGate: React.FC<MobilePairingGateProps> = ({
           {statusNotice ? (
             <div
               data-testid="pairing-session-notice"
-              className="rounded border border-[#F59E0B]/40 bg-[#F59E0B]/10 p-3 font-sans text-xs text-[#F59E0B]"
+              className="rounded-[var(--radius-md)] border border-status-warning-border bg-status-warning-bg p-3 font-sans text-xs text-status-warning"
             >
               {statusNotice}
             </div>
@@ -275,31 +255,31 @@ export const MobilePairingGate: React.FC<MobilePairingGateProps> = ({
           {phase === 'submitting' ? (
             <div
               data-testid="pairing-submitting"
-              className="rounded border border-white/[0.08] bg-[#090A0C] p-4 text-center font-sans text-sm text-[#F3F4F6]"
+              className="rounded-[var(--radius-md)] border border-border-subtle bg-bg-recess p-4 text-center font-sans text-sm text-text-primary"
             >
-              Validando QR Code com o computador...
+              Validando QR Code com o computador…
             </div>
           ) : null}
 
           {phase === 'waiting_approval' && verificationCode ? (
             <div
               data-testid="pairing-waiting-approval"
-              className="flex flex-col items-center gap-3 rounded border border-[#F59E0B]/40 bg-[#090A0C] p-4 text-center"
+              className="flex flex-col items-center gap-3 rounded-[var(--radius-md)] border border-status-warning-border bg-bg-recess p-4 text-center"
             >
-              <span className="font-mono text-[11px] uppercase tracking-wider text-[#F59E0B]">
+              <span className="font-mono text-[11px] uppercase tracking-wider text-status-warning">
                 Aguardando autorização no computador
               </span>
               <div
                 data-testid="mobile-verification-code"
-                className="rounded border border-white/10 bg-[#14161A] px-5 py-2.5 font-mono text-3xl font-bold tracking-[0.25em] text-[#F3F4F6] tabular-nums"
+                className="rounded-[var(--radius-md)] border border-border-strong bg-bg-surface px-5 py-2.5 font-mono text-3xl font-bold tracking-[0.25em] text-text-primary tabular-nums"
               >
                 {verificationCode}
               </div>
-              <p className="font-sans text-xs leading-relaxed text-[#8E95A2]">
+              <p className="font-sans text-xs leading-relaxed text-text-muted">
                 Confirme no computador que o código acima corresponde ao exibido na tela e
-                clique em <strong className="text-[#F3F4F6]">Autorizar</strong>.
+                clique em <strong className="text-text-primary">Autorizar</strong>.
               </p>
-              <span className="font-mono text-[11px] text-[#8E95A2]">
+              <span className="font-mono text-[11px] text-text-muted">
                 Dispositivo: {deviceName}
               </span>
             </div>
@@ -308,7 +288,7 @@ export const MobilePairingGate: React.FC<MobilePairingGateProps> = ({
           {phase === 'rejected' ? (
             <div
               data-testid="pairing-rejected"
-              className="rounded border border-[#EF4444]/40 bg-[#EF4444]/10 p-4 font-sans text-xs text-[#F3F4F6]"
+              className="rounded-[var(--radius-md)] border border-status-error-border bg-status-error-bg p-4 font-sans text-xs text-text-primary"
             >
               A solicitação de pareamento foi recusada no computador. Gere um novo QR Code
               caso deseje tentar novamente.
@@ -318,7 +298,7 @@ export const MobilePairingGate: React.FC<MobilePairingGateProps> = ({
           {phase === 'expired' ? (
             <div
               data-testid="pairing-expired"
-              className="rounded border border-[#F59E0B]/40 bg-[#F59E0B]/10 p-4 font-sans text-xs text-[#F3F4F6]"
+              className="rounded-[var(--radius-md)] border border-status-warning-border bg-status-warning-bg p-4 font-sans text-xs text-text-primary"
             >
               O tempo de aprovação expirou. Gere um novo QR Code no computador e escaneie
               novamente.
@@ -329,7 +309,8 @@ export const MobilePairingGate: React.FC<MobilePairingGateProps> = ({
           errorMessage ? (
             <div
               data-testid="pairing-error"
-              className="rounded border border-[#EF4444]/40 bg-[#EF4444]/10 p-4 font-sans text-xs text-[#F3F4F6]"
+              role="alert"
+              className="rounded-[var(--radius-md)] border border-status-error-border bg-status-error-bg p-4 font-sans text-xs text-text-primary"
             >
               {errorMessage}
             </div>
@@ -340,31 +321,34 @@ export const MobilePairingGate: React.FC<MobilePairingGateProps> = ({
           phase === 'expired' ||
           phase === 'error' ||
           phase === 'rate_limited' ? (
-            <div className="flex flex-col gap-3 rounded border border-white/[0.08] bg-[#090A0C] p-4">
-              <p className="font-sans text-xs leading-relaxed text-[#8E95A2]">
+            <div className="flex flex-col gap-3 border-t border-border-subtle pt-4">
+              <p className="font-sans text-xs leading-relaxed text-text-muted">
                 Por segurança, o acesso direto pelo IP não libera o controle da pedaleira.
                 Para conectar este celular:
               </p>
-              <ol className="list-inside list-decimal space-y-1.5 font-sans text-xs text-[#F3F4F6]">
+              <ol className="list-inside list-decimal space-y-1.5 font-sans text-xs text-text-primary">
                 <li>Abra o controlador no computador conectado à MG-300.</li>
                 <li>
-                  Clique em <strong className="font-semibold">Ajustes</strong> e toque em{' '}
-                  <strong className="font-semibold">Gerar QR Code de Pareamento</strong>.
+                  Clique em <strong className="font-semibold">Configurações</strong> e toque em{' '}
+                  <strong className="font-semibold">Gerar QR Code</strong>.
                 </li>
                 <li>Aponte a câmera deste celular para o QR Code na tela.</li>
                 <li>Autorize a conexão quando a solicitação aparecer no computador.</li>
               </ol>
 
-              <div className="mt-1 flex flex-col gap-1.5 border-t border-white/[0.06] pt-3">
+              <div className="mt-1 flex flex-col gap-1.5 border-t border-border-subtle pt-3">
                 <label
                   htmlFor="mobile-device-name"
-                  className="font-mono text-[11px] uppercase tracking-wider text-[#8E95A2]"
+                  className="font-mono text-[11px] uppercase tracking-wider text-text-muted"
                 >
                   Nome deste dispositivo
                 </label>
                 <input
                   id="mobile-device-name"
+                  name="device-name"
                   type="text"
+                  autoComplete="off"
+                  spellCheck={false}
                   value={deviceName}
                   maxLength={60}
                   onChange={(e) => {
@@ -372,7 +356,7 @@ export const MobilePairingGate: React.FC<MobilePairingGateProps> = ({
                     setDeviceName(next);
                     saveDeviceName(next);
                   }}
-                  className="min-h-[44px] rounded border border-white/10 bg-[#14161A] px-3 font-sans text-sm text-[#F3F4F6] focus:border-white/25 focus:outline-none"
+                  className="min-h-[44px] rounded-[var(--radius-md)] border border-border-strong bg-bg-recess px-3 font-sans text-sm text-text-primary"
                 />
               </div>
             </div>

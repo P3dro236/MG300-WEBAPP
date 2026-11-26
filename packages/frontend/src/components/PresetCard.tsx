@@ -37,7 +37,7 @@ interface PresetCardProps {
   onSelect: (preset: Preset) => void;
 }
 
-export const PresetCard: React.FC<PresetCardProps> = ({
+const PresetCardInner: React.FC<PresetCardProps> = ({
   preset,
   status,
   disabled,
@@ -48,27 +48,28 @@ export const PresetCard: React.FC<PresetCardProps> = ({
 
   const statusClasses =
     status === 'confirmed'
-      ? 'border-[#22C55E] bg-[#141A16]'
+      ? 'border-status-confirmed bg-status-confirmed-bg'
       : status === 'command_sent_unconfirmed'
-        ? 'border-[#F59E0B] bg-[#1B1710]'
-        : 'border-white/[0.08] bg-[#1B1E24] hover:border-white/25 hover:bg-[#22262E]';
+        ? 'border-status-warning bg-status-warning-bg'
+        : 'border-border-subtle bg-bg-elevated hover:border-border-hover';
 
   const ledClasses =
     status === 'confirmed'
-      ? 'bg-[#22C55E]'
+      ? 'bg-status-confirmed'
       : status === 'command_sent_unconfirmed'
-        ? 'bg-[#F59E0B]'
-        : 'bg-[#2E3440]';
+        ? 'bg-status-warning'
+        : 'bg-text-disabled';
 
   return (
     <button
       type="button"
       data-testid={`preset-card-${preset.id}`}
       data-status={status}
+      aria-label={`Carregar timbre ${preset.displayBank} — ${preset.name}`}
       disabled={disabled}
       onClick={() => onSelect(preset)}
-      className={`group relative flex flex-col justify-between rounded border text-left transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F59E0B]/70 disabled:cursor-not-allowed disabled:opacity-45 active:translate-y-px ${
-        isStage ? 'min-h-[96px] p-3.5 sm:min-h-[112px] sm:p-4' : 'min-h-[68px] p-2.5 sm:p-3'
+      className={`group relative flex flex-col justify-between rounded-[var(--radius-md)] border text-left transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-45 active:translate-y-px cursor-pointer ${
+        isStage ? 'min-h-[96px] p-4 sm:min-h-[108px]' : 'min-h-[68px] p-3'
       } ${statusClasses}`}
     >
       <div className="flex w-full items-center justify-between gap-2">
@@ -78,10 +79,10 @@ export const PresetCard: React.FC<PresetCardProps> = ({
             isStage ? 'text-base sm:text-lg' : 'text-xs'
           } ${
             status === 'confirmed'
-              ? 'text-[#22C55E]'
+              ? 'text-status-confirmed'
               : status === 'command_sent_unconfirmed'
-                ? 'text-[#F59E0B]'
-                : 'text-[#8E95A2]'
+                ? 'text-status-warning'
+                : 'text-text-muted'
           }`}
         >
           {preset.displayBank}
@@ -91,26 +92,26 @@ export const PresetCard: React.FC<PresetCardProps> = ({
           {status === 'confirmed' ? (
             <span
               data-testid={`preset-status-confirmed-${preset.id}`}
-              className="font-mono text-[10px] font-semibold tracking-wider text-[#22C55E]"
+              className="font-mono text-[11px] font-semibold tracking-wider text-status-confirmed"
             >
-              CONFIRMADO
+              Ativo
             </span>
           ) : status === 'command_sent_unconfirmed' ? (
             <span
               data-testid={`preset-status-sent-${preset.id}`}
-              className="font-mono text-[10px] font-semibold tracking-wider text-[#F59E0B]"
+              className="font-mono text-[11px] font-semibold tracking-wider text-status-warning"
             >
-              COMANDO ENVIADO
+              Enviando…
             </span>
           ) : null}
-          <span className={`h-2 w-2 rounded-full ${ledClasses}`} />
+          <span className={`h-2 w-2 rounded-full ${ledClasses}`} aria-hidden="true" />
         </span>
       </div>
 
       <div className="mt-1.5 flex w-full items-end justify-between gap-2">
         <span
           data-testid={`preset-name-${preset.id}`}
-          className={`line-clamp-2 font-sans font-semibold leading-snug text-[#F3F4F6] ${
+          className={`line-clamp-2 font-sans font-semibold leading-snug text-text-primary ${
             isStage ? 'text-base sm:text-lg' : 'text-xs sm:text-sm'
           }`}
         >
@@ -118,7 +119,7 @@ export const PresetCard: React.FC<PresetCardProps> = ({
         </span>
 
         {isStage ? (
-          <span className="shrink-0 font-mono text-[11px] font-semibold text-[#8E95A2]">
+          <span className="shrink-0 font-mono text-[11px] font-semibold text-text-muted">
             {preset.patchLetter}
           </span>
         ) : null}
@@ -126,3 +127,5 @@ export const PresetCard: React.FC<PresetCardProps> = ({
     </button>
   );
 };
+
+export const PresetCard = React.memo(PresetCardInner);

@@ -1,7 +1,10 @@
 import React from 'react';
+import { Plus, SlidersHorizontal } from 'lucide-react';
 import {
   type ConfirmedDeviceState,
   type DeviceSyncStatus,
+  MG300_BLOCK_CATALOG,
+  type Mg300BlockCode,
   type Preset,
   type SentCommandRecord,
   classifyPresetCategory,
@@ -12,128 +15,237 @@ interface StageDisplayProps {
   syncStatus: DeviceSyncStatus;
   confirmedState: ConfirmedDeviceState;
   lastSentCommand: SentCommandRecord | null;
+  liveBlockModels?: Record<string, number> | null;
+  liveEditorSlot?: number | null;
+  canOpenEditor?: boolean;
+  onEditActiveTone?: (initialBlockId?: number) => void;
+  onCreateNewTone?: () => void;
+  onPreloadEditor?: () => void;
 }
 
-const SIGNAL_CHAIN_NODES: ReadonlyArray<{
-  key: keyof NonNullable<Preset['signalChain']>;
-  label: string;
-}> = [
-  { key: 'compEnabled', label: 'COMP' },
-  { key: 'efxEnabled', label: 'EFX' },
-  { key: 'ampEnabled', label: 'AMP' },
-  { key: 'irEnabled', label: 'IR' },
-  { key: 'eqEnabled', label: 'EQ' },
-  { key: 'nrEnabled', label: 'NR' },
-  { key: 'modEnabled', label: 'MOD' },
-  { key: 'dlyEnabled', label: 'DLY' },
-  { key: 'rvbEnabled', label: 'RVB' },
-];
+function isCatalogBlockActiveFromPreset(
+  preset: Preset | null,
+  code: Mg300BlockCode,
+): boolean | null {
+  const chain = preset?.signalChain;
+  if (!chain) return null;
+  switch (code) {
+    case 'COMP':
+      return Boolean(chain.compEnabled);
+    case 'EFX':
+      return Boolean(chain.efxEnabled);
+    case 'AMP':
+      return Boolean(chain.ampEnabled);
+    case 'EQ':
+      return Boolean(chain.eqEnabled);
+    case 'NR':
+      return Boolean(chain.nrEnabled);
+    case 'MOD':
+      return Boolean(chain.modEnabled);
+    case 'DLY':
+      return Boolean(chain.dlyEnabled);
+    case 'RVB':
+      return Boolean(chain.rvbEnabled);
+    case 'CAB':
+      return Boolean(chain.irEnabled);
+    case 'MIC':
+      return null;
+    default:
+      return false;
+  }
+}
 
 export const StageDisplay: React.FC<StageDisplayProps> = ({
   activePreset,
-  syncStatus,
+  syncStatus: _syncStatus,
   confirmedState,
   lastSentCommand,
+  liveBlockModels = null,
+  liveEditorSlot = null,
+  canOpenEditor = false,
+  onEditActiveTone,
+  onCreateNewTone,
+  onPreloadEditor,
 }) => {
-  const isConfirmed =
-    Boolean(confirmedState.presetId) &&
-    activePreset?.id === confirmedState.presetId &&
-    syncStatus === 'confirmed';
   const isPending =
     lastSentCommand?.type === 'preset_select' &&
     !lastSentCommand.confirmedByDevice &&
     activePreset?.id === lastSentCommand.presetId;
+  const isConfirmed =
+    Boolean(confirmedState.presetId) &&
+    activePreset?.id === confirmedState.presetId &&
+    !isPending;
+
+  const isUserPreset =
+    activePreset !== null && classifyPresetCategory(activePreset) === 'user';
 
   const displayBank =
     activePreset?.displayBank ??
     confirmedState.presetId ??
     lastSentCommand?.presetId ??
-    '--';
+    '—';
 
   const displayName =
     activePreset?.name ??
     (confirmedState.presetId
       ? `Slot ${confirmedState.presetId}`
-      : 'Selecione um preset');
+      : 'Selecione um timbre');
 
   const categoryLabel = activePreset
-    ? classifyPresetCategory(activePreset) === 'factory'
-      ? 'FÁBRICA'
-      : 'USUÁRIO'
-    : 'SEM LEITURA';
+    ? isUserPreset
+      ? 'Usuário'
+      : 'Fábrica'
+    : 'Sem leitura';
 
   const statusTag = isConfirmed
     ? {
-        label: 'CONFIRMADO HARDWARE',
-        cls: 'border-[#22C55E]/40 bg-[#22C55E]/10 text-[#22C55E]',
+        label: 'Confirmado',
+        cls: 'border-status-confirmed-border bg-status-confirmed-bg text-status-confirmed',
       }
     : isPending
       ? {
-          label: 'COMANDO ENVIADO',
-          cls: 'border-[#F59E0B]/40 bg-[#F59E0B]/10 text-[#F59E0B]',
+          label: 'Enviando…',
+          cls: 'border-status-warning-border bg-status-warning-bg text-status-warning',
         }
       : {
-          label: 'AGUARDANDO SINAL',
-          cls: 'border-white/10 bg-[#14161A] text-[#8E95A2]',
+          label: 'Aguardando pedaleira',
+          cls: 'border-border-subtle bg-bg-surface text-text-muted',
         };
+
+  const hasLiveEditorMatch =
+    liveBlockModels !== null &&
+    activePreset !== null &&
+    liveEditorSlot !== null &&
+    liveEditorSlot === activePreset.slotIndex;
 
   return (
     <section
       data-testid="stage-display"
-      aria-label="Visor principal do preset ativo"
-      className="rounded-md border border-white/[0.08] bg-[#090A0C] p-3.5 sm:p-4"
+      aria-label="Visor principal do timbre ativo"
+      className="rounded-[var(--radius-lg)] border border-border-subtle bg-bg-recess p-4"
     >
-      <div className="flex flex-col gap-3">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/[0.06] pb-2.5">
-          <div className="flex items-center gap-2 font-mono text-[11px] tracking-wider text-[#8E95A2]">
-            <span>PRESET ATIVO</span>
-            <span className="text-white/20">/</span>
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border-subtle pb-3">
+          <div className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-wider text-text-muted">
+            <span>Timbre ativo</span>
+            <span className="text-border-strong" aria-hidden="true">
+              /
+            </span>
             <span>{categoryLabel}</span>
           </div>
 
           <span
-            className={`inline-flex items-center rounded border px-2 py-0.5 font-mono text-[10px] font-semibold tracking-wider ${statusTag.cls}`}
+            aria-live="polite"
+            className={`inline-flex items-center rounded-[var(--radius-sm)] border px-2 py-0.5 font-mono text-[11px] font-semibold ${statusTag.cls}`}
           >
             {statusTag.label}
           </span>
         </div>
 
-        <div className="flex items-baseline justify-between gap-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex min-w-0 items-baseline gap-3 sm:gap-4">
-            <span className="shrink-0 font-mono text-3xl font-bold tracking-tight text-[#F3F4F6] tabular-nums sm:text-4xl">
+            <span className="shrink-0 font-mono text-3xl font-bold tracking-tight text-text-primary tabular-nums sm:text-4xl">
               {displayBank}
             </span>
-            <h1 className="truncate font-sans text-xl font-semibold tracking-tight text-[#F3F4F6] sm:text-2xl">
+            <h1 className="truncate font-sans text-xl font-semibold tracking-tight text-text-primary sm:text-2xl">
               {displayName}
             </h1>
           </div>
+
+          {canOpenEditor && (onEditActiveTone || onCreateNewTone) ? (
+            <div className="flex flex-wrap items-center gap-2">
+              {isUserPreset && onEditActiveTone ? (
+                <button
+                  type="button"
+                  data-testid="open-tone-editor-btn"
+                  onMouseEnter={onPreloadEditor}
+                  onFocus={onPreloadEditor}
+                  onClick={() => onEditActiveTone()}
+                  className="inline-flex min-h-[44px] items-center gap-2 rounded-[var(--radius-md)] border border-border-strong bg-bg-elevated px-3.5 font-sans text-xs font-semibold text-text-primary transition-colors duration-150 hover:border-border-hover lg:min-h-[38px] cursor-pointer"
+                >
+                  <SlidersHorizontal className="h-4 w-4 text-accent" strokeWidth={1.75} aria-hidden="true" />
+                  <span>Editar timbre</span>
+                </button>
+              ) : null}
+
+              {onCreateNewTone ? (
+                <button
+                  type="button"
+                  data-testid="create-tone-btn"
+                  onMouseEnter={onPreloadEditor}
+                  onFocus={onPreloadEditor}
+                  onClick={onCreateNewTone}
+                  className="inline-flex min-h-[44px] items-center gap-1.5 rounded-[var(--radius-md)] border border-border-subtle bg-bg-surface px-3 font-sans text-xs font-medium text-text-muted transition-colors duration-150 hover:border-border-hover hover:text-text-primary lg:min-h-[38px] cursor-pointer"
+                >
+                  <Plus className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
+                  <span>Criar novo timbre</span>
+                </button>
+              ) : null}
+            </div>
+          ) : null}
         </div>
 
         <div
           data-testid="signal-chain-strip"
-          aria-label="Cadeia de sinal do preset (somente leitura)"
-          className="grid grid-cols-5 gap-1 pt-1 sm:grid-cols-9"
+          aria-label="Cadeia de sinal do timbre ativo"
+          className="grid grid-cols-5 gap-1.5 sm:grid-cols-10"
         >
-          {SIGNAL_CHAIN_NODES.map((node) => {
-            const hasChain = Boolean(activePreset?.signalChain);
-            const active = activePreset?.signalChain
-              ? Boolean(activePreset.signalChain[node.key])
-              : false;
+          {MG300_BLOCK_CATALOG.map((block) => {
+            const liveActive = hasLiveEditorMatch
+              ? (liveBlockModels[String(block.id)] ?? 0) > 0
+              : null;
+            const presetActive = isCatalogBlockActiveFromPreset(activePreset, block.code);
+            const resolvedActive = liveActive !== null ? liveActive : presetActive;
+            const hasKnownState = resolvedActive !== null;
+            const isActive = resolvedActive === true;
+            const canClickBlock = canOpenEditor && isUserPreset && Boolean(onEditActiveTone);
+
+            const chipClass = `flex min-h-[44px] lg:min-h-[36px] items-center justify-center gap-1.5 rounded-[var(--radius-sm)] border font-mono text-[11px] font-semibold tracking-wider transition-colors duration-150 ${
+              isActive
+                ? 'border-status-confirmed-border bg-status-confirmed-bg text-text-primary'
+                : 'border-border-subtle bg-bg-surface text-text-dim'
+            }`;
+
+            if (canClickBlock) {
+              return (
+                <button
+                  key={block.id}
+                  type="button"
+                  translate="no"
+                  data-block={block.code}
+                  data-active={hasKnownState ? String(isActive) : 'unknown'}
+                  aria-haspopup="dialog"
+                  aria-label={`Editar bloco ${block.label} (${isActive ? 'ligado' : 'desligado'})`}
+                  onMouseEnter={onPreloadEditor}
+                  onClick={() => onEditActiveTone?.(block.id)}
+                  className={`${chipClass} hover:border-border-hover cursor-pointer`}
+                >
+                  <span
+                    aria-hidden="true"
+                    className={`h-1.5 w-1.5 rounded-full ${
+                      isActive ? 'bg-status-confirmed' : 'bg-text-disabled'
+                    }`}
+                  />
+                  <span>{block.code}</span>
+                </button>
+              );
+            }
 
             return (
               <div
-                key={node.key}
-                data-block={node.label}
-                data-active={hasChain ? String(active) : 'unknown'}
-                className={`flex h-7 items-center justify-center rounded-sm border font-mono text-[10px] font-semibold tracking-wider transition-colors duration-150 ${
-                  active
-                    ? 'border-[#22C55E]/45 bg-[#22C55E]/10 text-[#F3F4F6]'
-                    : hasChain
-                      ? 'border-white/[0.06] bg-[#14161A]/60 text-[#525866]'
-                      : 'border-white/[0.05] bg-[#14161A]/30 text-[#525866]'
-                }`}
+                key={block.id}
+                translate="no"
+                data-block={block.code}
+                data-active={hasKnownState ? String(isActive) : 'unknown'}
+                className={chipClass}
               >
-                {node.label}
+                <span
+                  aria-hidden="true"
+                  className={`h-1.5 w-1.5 rounded-full ${
+                    isActive ? 'bg-status-confirmed' : 'bg-text-disabled'
+                  }`}
+                />
+                <span>{block.code}</span>
               </div>
             );
           })}

@@ -14,11 +14,25 @@ export const QrCodeSvg: React.FC<QrCodeSvgProps> = ({
 }) => {
   const matrix = useMemo(() => generateQrMatrix(value), [value]);
 
+  const pathData = useMemo(() => {
+    if (!matrix) return '';
+    const quiet = 4;
+    const segments: string[] = [];
+    for (let r = 0; r < matrix.size; r++) {
+      for (let c = 0; c < matrix.size; c++) {
+        if (matrix.modules[r]?.[c]) {
+          segments.push(`M${c + quiet} ${r + quiet}h1v1h-1z`);
+        }
+      }
+    }
+    return segments.join('');
+  }, [matrix]);
+
   if (!matrix) {
     return (
       <div
         data-testid="qr-code-fallback"
-        className="flex items-center justify-center border border-white/10 bg-[#090A0C] p-3 font-mono text-[11px] text-[#8E95A2]"
+        className="flex items-center justify-center rounded-[var(--radius-sm)] border border-border-subtle bg-bg-recess p-3 font-mono text-[11px] text-text-muted"
         style={{ width: sizePx, height: sizePx }}
       >
         URL muito longa
@@ -26,16 +40,7 @@ export const QrCodeSvg: React.FC<QrCodeSvgProps> = ({
     );
   }
 
-  const quiet = 4;
-  const total = matrix.size + quiet * 2;
-  const rects: Array<{ x: number; y: number }> = [];
-  for (let r = 0; r < matrix.size; r++) {
-    for (let c = 0; c < matrix.size; c++) {
-      if (matrix.modules[r]?.[c]) {
-        rects.push({ x: c + quiet, y: r + quiet });
-      }
-    }
-  }
+  const total = matrix.size + 8;
 
   return (
     <svg
@@ -46,19 +51,10 @@ export const QrCodeSvg: React.FC<QrCodeSvgProps> = ({
       height={sizePx}
       viewBox={`0 0 ${total} ${total}`}
       shapeRendering="crispEdges"
-      className="rounded border border-white/15 bg-[#F3F4F6]"
+      className="rounded-[var(--radius-sm)] border border-border-strong bg-text-primary"
     >
-      <rect width={total} height={total} fill="#F3F4F6" />
-      {rects.map((cell) => (
-        <rect
-          key={`${cell.x}-${cell.y}`}
-          x={cell.x}
-          y={cell.y}
-          width={1}
-          height={1}
-          fill="#0D0E10"
-        />
-      ))}
+      <rect width={total} height={total} fill="var(--text-primary)" />
+      <path d={pathData} fill="var(--bg-recess)" />
     </svg>
   );
 };
