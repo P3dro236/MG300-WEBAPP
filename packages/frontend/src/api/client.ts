@@ -547,6 +547,13 @@ export class QuickToneApiClient {
       body: JSON.stringify({ confirmSlot }),
     });
   }
+
+  public discardExperimentalEdit(): Promise<ExperimentalEditState> {
+    return this.request('/api/experimental/discard', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+  }
 }
 
 export type { ExperimentalEditState, ExperimentalSaveResult };

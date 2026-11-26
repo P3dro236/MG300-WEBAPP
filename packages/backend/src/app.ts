@@ -1007,6 +1007,9 @@ export function createBackendApp(options: BackendAppOptions = {}): QuickToneBack
       const { confirmSlot } = ExperimentalSaveRequestSchema.parse(request.body ?? {});
       return experimental.save(confirmSlot);
     });
+    fastify.post('/api/experimental/discard', async () => {
+      return experimental.discard();
+    });
   }
 
   // Static Frontend Serving (SPA fallback when packages/frontend/dist exists)

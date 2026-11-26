@@ -807,9 +807,18 @@ export class ExperimentalEditService {
     return result;
   }
 
+  public async discard(): Promise<ExperimentalEditState> {
+    return this.runExclusive(async () => {
+      this.sourceFileName = null;
+      this.invalidateDraft();
+      return this.getState();
+    });
+  }
+
   private invalidateDraft(): void {
     this.draft = null;
     this.draftGeneration += 1;
+    this.sourceMode = 'hardware';
     this.dirty = false;
     this.modelChangedSinceLoad = false;
     this.lastModelByBlock.clear();

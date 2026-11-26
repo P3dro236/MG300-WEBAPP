@@ -5,10 +5,9 @@ import {
   MG300_USER_IR_CAB_ID,
 } from '@quicktone/shared';
 
-export interface ExperimentalFaderProps {
+export interface ToneFaderProps {
   testId: string;
   label: string;
-  labelWidthClass?: string;
   value: number;
   max: number;
   disabled: boolean;
@@ -17,10 +16,9 @@ export interface ExperimentalFaderProps {
   onChangeValue: (value: number) => void;
 }
 
-export const ExperimentalFader: React.FC<ExperimentalFaderProps> = ({
+export const ToneFader: React.FC<ToneFaderProps> = ({
   testId,
   label,
-  labelWidthClass = 'w-20',
   value,
   max,
   disabled,
@@ -33,7 +31,7 @@ export const ExperimentalFader: React.FC<ExperimentalFaderProps> = ({
 
   return (
     <label className="flex items-center gap-3">
-      <span className={`${labelWidthClass} shrink-0 font-mono text-xs text-[#8E95A2]`}>
+      <span className="min-w-[96px] shrink-0 font-mono text-xs text-text-muted">
         {label}
       </span>
       <input
@@ -52,7 +50,7 @@ export const ExperimentalFader: React.FC<ExperimentalFaderProps> = ({
         onChange={(e) => onChangeValue(Number(e.target.value))}
         className="chassis-fader flex-1"
       />
-      <span className="w-10 shrink-0 text-right font-mono text-xs font-semibold text-[#F3F4F6] tabular-nums">
+      <span className="w-10 shrink-0 text-right font-mono text-xs font-semibold text-text-primary tabular-nums">
         {clamped}
       </span>
     </label>
@@ -65,19 +63,23 @@ const IR_CUT_OPTIONS: ReadonlyArray<{ value: number; label: string }> = [
   { value: 2, label: 'Hi/Lo Cut' },
 ];
 
-export interface IrCutSelectorProps {
+export interface ToneIrCutSelectorProps {
   value: number;
   disabled: boolean;
   onChange: (value: number) => void;
 }
 
-export const IrCutSelector: React.FC<IrCutSelectorProps> = ({ value, disabled, onChange }) => (
+export const ToneIrCutSelector: React.FC<ToneIrCutSelectorProps> = ({
+  value,
+  disabled,
+  onChange,
+}) => (
   <div className="flex flex-wrap items-center justify-between gap-2">
-    <span className="font-mono text-xs text-[#8E95A2]">IR Cut</span>
+    <span className="font-mono text-xs text-text-muted">Corte de IR</span>
     <div
       role="group"
       aria-label="Corte de frequência do IR"
-      className="inline-flex rounded border border-white/[0.08] bg-[#14161A] p-0.5 font-mono text-xs"
+      className="inline-flex rounded-[var(--radius-md)] border border-border-subtle bg-bg-surface p-0.5 font-mono text-xs"
     >
       {IR_CUT_OPTIONS.map((opt) => {
         const selected = value === opt.value;
@@ -88,10 +90,10 @@ export const IrCutSelector: React.FC<IrCutSelectorProps> = ({ value, disabled, o
             aria-pressed={selected}
             disabled={disabled}
             onClick={() => onChange(opt.value)}
-            className={`min-h-[44px] rounded-sm px-3 transition-colors duration-150 sm:min-h-[40px] ${
+            className={`min-h-[44px] rounded-[var(--radius-sm)] px-3 transition-colors duration-150 lg:min-h-[38px] cursor-pointer ${
               selected
-                ? 'bg-[#1B1E24] font-semibold text-[#F3F4F6]'
-                : 'text-[#8E95A2] hover:text-[#F3F4F6]'
+                ? 'bg-bg-elevated font-semibold text-text-primary'
+                : 'text-text-muted hover:text-text-primary'
             }`}
           >
             {opt.label}
@@ -102,7 +104,7 @@ export const IrCutSelector: React.FC<IrCutSelectorProps> = ({ value, disabled, o
   </div>
 );
 
-export interface ExperimentalBlockInspectorProps {
+export interface ToneBlockInspectorProps {
   block: Mg300BlockCatalogEntry;
   modelId: number;
   modelSpec: Mg300ModelSpec | undefined;
@@ -119,7 +121,7 @@ export interface ExperimentalBlockInspectorProps {
   onDragEnd: () => void;
 }
 
-export const ExperimentalBlockInspector: React.FC<ExperimentalBlockInspectorProps> = ({
+export const ToneBlockInspector: React.FC<ToneBlockInspectorProps> = ({
   block,
   modelId,
   modelSpec,
@@ -138,20 +140,20 @@ export const ExperimentalBlockInspector: React.FC<ExperimentalBlockInspectorProp
   const isEnabled = modelId > 0;
 
   return (
-    <div className="flex flex-col gap-3 rounded border border-white/[0.08] bg-[#090A0C] p-3">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/[0.06] pb-2.5">
+    <div className="flex flex-col gap-4 rounded-[var(--radius-md)] border border-border-subtle bg-bg-recess p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border-subtle pb-3">
         <div className="flex items-center gap-2">
-          <span className="font-mono text-xs font-bold tracking-wider text-[#F3F4F6]">
-            BLOCO {block.label}
+          <span className="font-mono text-xs font-bold tracking-wider text-text-primary">
+            {block.label}
           </span>
           <span
-            className={`rounded border px-2 py-0.5 font-mono text-[10px] font-semibold ${
+            className={`rounded-[var(--radius-sm)] border px-2 py-0.5 font-mono text-[11px] font-semibold ${
               isEnabled
-                ? 'border-[#22C55E]/40 bg-[#22C55E]/10 text-[#22C55E]'
-                : 'border-white/10 bg-[#14161A] text-[#8E95A2]'
+                ? 'border-status-confirmed-border bg-status-confirmed-bg text-status-confirmed'
+                : 'border-border-subtle bg-bg-surface text-text-muted'
             }`}
           >
-            {isEnabled ? 'ATIVO' : 'OFF'}
+            {isEnabled ? 'Ligado' : 'Desligado'}
           </span>
         </div>
 
@@ -161,41 +163,46 @@ export const ExperimentalBlockInspector: React.FC<ExperimentalBlockInspectorProp
           aria-pressed={isEnabled}
           disabled={disabled}
           onClick={onToggleBlock}
-          className={`min-h-[44px] rounded border px-3.5 font-mono text-xs font-semibold transition-colors duration-150 disabled:opacity-40 ${
+          className={`min-h-[44px] rounded-[var(--radius-md)] border px-3.5 font-sans text-xs font-semibold transition-colors duration-150 disabled:opacity-40 cursor-pointer ${
             isEnabled
-              ? 'border-[#22C55E]/50 bg-[#141A16] text-[#22C55E] hover:border-[#22C55E]'
-              : 'border-white/15 bg-[#1B1E24] text-[#F3F4F6] hover:border-white/30'
+              ? 'border-status-confirmed-border bg-status-confirmed-bg text-status-confirmed hover:border-status-confirmed'
+              : 'border-border-strong bg-bg-elevated text-text-primary hover:border-border-hover'
           }`}
         >
-          {isEnabled ? 'Desligar Bloco' : 'Ligar Bloco'}
+          {isEnabled ? 'Desligar' : 'Ligar'}
         </button>
       </div>
 
-      {/* Seletor de pedal / modelo */}
       <label className="flex flex-col gap-1.5">
-        <span className="font-mono text-[11px] uppercase tracking-wide text-[#8E95A2]">
-          Pedal / Modelo ({block.label})
+        <span className="font-mono text-[11px] uppercase tracking-wide text-text-muted">
+          Modelo ({block.label})
         </span>
         <select
           data-testid={`exp-model-select-${block.code}`}
+          name={`model-${block.code}`}
           disabled={disabled}
           value={modelId}
           onChange={(e) => onChangeModel(Number(e.target.value))}
-          className="min-h-[44px] w-full rounded border border-white/15 bg-[#14161A] px-3 font-mono text-xs text-[#F3F4F6] disabled:opacity-40"
+          className="min-h-[44px] w-full rounded-[var(--radius-md)] border border-border-strong bg-bg-surface px-3 font-mono text-xs text-text-primary disabled:opacity-40"
         >
-          <option value={0}>0 — OFF (Bypass)</option>
+          <option value={0} className="bg-bg-surface text-text-primary">
+            Desligado (Bypass)
+          </option>
           {block.models.map((model) => (
-            <option key={model.id} value={model.id}>
-              {model.id === MG300_USER_IR_CAB_ID ? 'USER' : model.id} — {model.name}
+            <option
+              key={model.id}
+              value={model.id}
+              className="bg-bg-surface text-text-primary"
+            >
+              {model.id === MG300_USER_IR_CAB_ID ? `USER IR · ${model.name}` : model.name}
             </option>
           ))}
         </select>
       </label>
 
-      {/* Controles dinâmicos para o modelo escolhido */}
       {block.id <= 8 ? (
         modelSpec ? (
-          <div className="flex flex-col gap-2.5">
+          <div className="flex flex-col gap-3">
             {modelSpec.params.map((param) => {
               const val = values[param.paramIndex] ?? 0;
               if (param.controlType === 'toggle') {
@@ -205,7 +212,7 @@ export const ExperimentalBlockInspector: React.FC<ExperimentalBlockInspectorProp
                     key={`${block.id}-${modelId}-${param.cc}`}
                     className="flex items-center justify-between gap-3"
                   >
-                    <span className="font-mono text-xs text-[#8E95A2]">{param.label}</span>
+                    <span className="font-mono text-xs text-text-muted">{param.label}</span>
                     <button
                       type="button"
                       data-testid={`exp-toggle-param-${block.code}-${param.paramIndex}`}
@@ -215,13 +222,13 @@ export const ExperimentalBlockInspector: React.FC<ExperimentalBlockInspectorProp
                       onClick={() =>
                         onChangeParam(param.paramIndex, isToggleOn ? 0 : (param.onValue ?? 1))
                       }
-                      className={`min-h-[44px] min-w-[96px] rounded border px-3 font-mono text-xs font-semibold transition-colors duration-150 ${
+                      className={`min-h-[44px] min-w-[104px] rounded-[var(--radius-md)] border px-3 font-mono text-xs font-semibold transition-colors duration-150 cursor-pointer ${
                         isToggleOn
-                          ? 'border-[#F59E0B]/60 bg-[#1B1710] text-[#F59E0B]'
-                          : 'border-white/15 bg-[#14161A] text-[#8E95A2]'
+                          ? 'border-accent-border bg-accent-soft text-accent'
+                          : 'border-border-strong bg-bg-surface text-text-muted'
                       }`}
                     >
-                      {isToggleOn ? 'LIGADO' : 'DESLIGADO'}
+                      {isToggleOn ? 'Ligado' : 'Desligado'}
                     </button>
                   </div>
                 );
@@ -237,18 +244,23 @@ export const ExperimentalBlockInspector: React.FC<ExperimentalBlockInspectorProp
                     key={`${block.id}-${modelId}-${param.cc}`}
                     className="flex items-center justify-between gap-3"
                   >
-                    <span className="w-20 shrink-0 font-mono text-xs text-[#8E95A2]">
+                    <span className="min-w-[96px] shrink-0 font-mono text-xs text-text-muted">
                       {param.label}
                     </span>
                     <select
                       data-testid={`exp-select-param-${block.code}-${param.paramIndex}`}
+                      name={`param-${block.code}-${param.paramIndex}`}
                       disabled={disabled}
                       value={clampedOption}
                       onChange={(e) => onChangeParam(param.paramIndex, Number(e.target.value))}
-                      className="min-h-[44px] flex-1 rounded border border-white/15 bg-[#14161A] px-3 font-mono text-xs text-[#F3F4F6]"
+                      className="min-h-[44px] flex-1 rounded-[var(--radius-md)] border border-border-strong bg-bg-surface px-3 font-mono text-xs text-text-primary"
                     >
                       {param.options.map((opt) => (
-                        <option key={opt.value} value={opt.value}>
+                        <option
+                          key={opt.value}
+                          value={opt.value}
+                          className="bg-bg-surface text-text-primary"
+                        >
                           {opt.label}
                         </option>
                       ))}
@@ -258,7 +270,7 @@ export const ExperimentalBlockInspector: React.FC<ExperimentalBlockInspectorProp
               }
 
               return (
-                <ExperimentalFader
+                <ToneFader
                   key={`${block.id}-${modelId}-${param.cc}`}
                   testId={`exp-slider-${block.code}-${param.paramIndex}`}
                   label={param.label}
@@ -273,18 +285,17 @@ export const ExperimentalBlockInspector: React.FC<ExperimentalBlockInspectorProp
             })}
           </div>
         ) : (
-          <p className="font-sans text-xs text-[#8E95A2]">
-            Bloco em bypass (OFF). Selecione um modelo acima para ajustar os parâmetros.
+          <p className="font-sans text-xs text-text-muted">
+            Bloco em bypass. Selecione um modelo acima para ajustar os parâmetros.
           </p>
         )
       ) : null}
 
-      {/* Controles de IR diretamente no bloco CAB (id 9) */}
       {block.id === 9 ? (
-        <div className="flex flex-col gap-3 border-t border-white/[0.06] pt-2.5">
-          <ExperimentalFader
+        <div className="flex flex-col gap-3 border-t border-border-subtle pt-3">
+          <ToneFader
             testId="exp-slider-cab-irVolume"
-            label="IR Level"
+            label="Volume do IR"
             value={irVolume}
             max={40}
             disabled={disabled}
@@ -292,7 +303,7 @@ export const ExperimentalBlockInspector: React.FC<ExperimentalBlockInspectorProp
             onDragEnd={onDragEnd}
             onChangeValue={(v) => onChangeLevel('irVolume', v)}
           />
-          <IrCutSelector
+          <ToneIrCutSelector
             value={irCut}
             disabled={disabled}
             onChange={(v) => onChangeLevel('irCut', v)}
@@ -300,9 +311,8 @@ export const ExperimentalBlockInspector: React.FC<ExperimentalBlockInspectorProp
         </div>
       ) : null}
 
-      {/* Nota contextual para MIC quando CAB está desligado */}
       {block.id === 10 && !cabEnabled ? (
-        <p className="font-sans text-xs text-[#8E95A2]">
+        <p className="font-sans text-xs text-text-muted">
           Dica: o bloco CAB está desligado; ative um gabinete no bloco CAB para ouvir a simulação de
           microfone.
         </p>
@@ -311,62 +321,52 @@ export const ExperimentalBlockInspector: React.FC<ExperimentalBlockInspectorProp
   );
 };
 
-export interface ExperimentalLevelsPanelProps {
+export interface ToneLevelsPanelProps {
   patchVolume: number;
-  irVolume: number;
-  irCut: number;
   disabled: boolean;
-  onChangeLevel: (target: 'patchVolume' | 'irVolume' | 'irCut', value: number) => void;
+  onChangePatchVolume: (value: number) => void;
+  onJumpToCab: () => void;
   onDragStart: () => void;
   onDragEnd: () => void;
 }
 
-export const ExperimentalLevelsPanel: React.FC<ExperimentalLevelsPanelProps> = ({
+export const ToneLevelsPanel: React.FC<ToneLevelsPanelProps> = ({
   patchVolume,
-  irVolume,
-  irCut,
   disabled,
-  onChangeLevel,
+  onChangePatchVolume,
+  onJumpToCab,
   onDragStart,
   onDragEnd,
 }) => (
-  <div className="flex flex-col gap-3 rounded border border-white/[0.08] bg-[#090A0C] p-3">
-    <div className="border-b border-white/[0.06] pb-2">
-      <span className="font-mono text-xs font-bold tracking-wider text-[#F3F4F6]">
-        NÍVEIS DO PRESET &amp; IR
+  <div className="flex flex-col gap-4 rounded-[var(--radius-md)] border border-border-subtle bg-bg-recess p-4">
+    <div className="border-b border-border-subtle pb-2.5">
+      <span className="font-mono text-xs font-bold tracking-wider text-text-primary">
+        NÍVEL DO TIMBRE
       </span>
     </div>
 
-    <ExperimentalFader
+    <ToneFader
       testId="exp-slider-patchVolume"
-      label="Patch Level"
-      labelWidthClass="w-24"
+      label="Volume do timbre"
       value={patchVolume}
       max={100}
       disabled={disabled}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
-      onChangeValue={(v) => onChangeLevel('patchVolume', v)}
+      onChangeValue={onChangePatchVolume}
     />
 
-    <ExperimentalFader
-      testId="exp-slider-irVolume"
-      label="IR Volume"
-      labelWidthClass="w-24"
-      value={irVolume}
-      max={40}
-      disabled={disabled}
-      onDragStart={onDragStart}
-      onDragEnd={onDragEnd}
-      onChangeValue={(v) => onChangeLevel('irVolume', v)}
-    />
-
-    <div className="pt-1">
-      <IrCutSelector
-        value={irCut}
-        disabled={disabled}
-        onChange={(v) => onChangeLevel('irCut', v)}
-      />
+    <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border-subtle pt-3">
+      <span className="font-sans text-xs text-text-muted">
+        Volume e corte de IR ficam centralizados no bloco CAB.
+      </span>
+      <button
+        type="button"
+        onClick={onJumpToCab}
+        className="min-h-[44px] rounded-[var(--radius-sm)] border border-border-strong bg-bg-surface px-3 font-sans text-xs font-medium text-text-primary transition-colors hover:border-border-hover lg:min-h-[34px] cursor-pointer"
+      >
+        Ir para CAB
+      </button>
     </div>
   </div>
 );
