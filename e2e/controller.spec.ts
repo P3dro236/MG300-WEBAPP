@@ -47,6 +47,8 @@ test.describe('QuickTone Web Controller — Testes E2E Full-Stack (Playwright)',
       presetsDirectory: tempDir,
       includeFactoryPresets: true,
       autoConnectMidiOnInit: true,
+      experimentalEdit: true,
+      experimentalBackupDir: path.join(tempDir, 'backups'),
     });
 
     await server.stateManager.initialize();
@@ -88,7 +90,7 @@ test.describe('QuickTone Web Controller — Testes E2E Full-Stack (Playwright)',
       'data-status',
       'command_sent_unconfirmed',
     );
-    await expect(page.getByTestId('preset-status-sent-1B')).toHaveText('COMANDO ENVIADO');
+    await expect(page.getByTestId('preset-status-sent-1B')).toHaveText('Enviando…');
     await expect(page.getByTestId('device-sync-badge')).toHaveAttribute(
       'data-sync-status',
       'command_sent_unconfirmed',
@@ -100,12 +102,12 @@ test.describe('QuickTone Web Controller — Testes E2E Full-Stack (Playwright)',
     // Simula resposta de confirmação real da NUX MG-300 via MIDI IN ([0xB0, 0x3C, 0x01])
     mockMidi.simulateHardwareIncoming([0xb0, 0x3c, 0x01]);
 
-    // Interface deve atualizar instantaneamente via WebSocket para "CONFIRMADO"
+    // Interface deve atualizar instantaneamente via WebSocket para "Ativo"
     await expect(page.getByTestId('preset-card-1B')).toHaveAttribute(
       'data-status',
       'confirmed',
     );
-    await expect(page.getByTestId('preset-status-confirmed-1B')).toHaveText('CONFIRMADO');
+    await expect(page.getByTestId('preset-status-confirmed-1B')).toHaveText('Ativo');
     await expect(page.getByTestId('device-sync-badge')).toHaveAttribute(
       'data-sync-status',
       'confirmed',
@@ -157,9 +159,11 @@ test.describe('QuickTone Web Controller — Testes E2E Full-Stack (Playwright)',
     await expect(pageA.getByTestId('volume-value')).toHaveText('55%');
     await expect(pageB.getByTestId('volume-value')).toHaveText('55%');
 
-    // Alterna filtros Usuário / Fábrica e Modo palco <-> Matriz
+    // Alterna filtros Usuário / Fábrica e Palco <-> Bancos + valida Editor oculto em Fábrica
     await pageA.getByTestId('filter-tab-factory').click();
     await expect(pageA.getByTestId('preset-card-F1A')).toBeVisible();
+    await pageA.getByTestId('preset-card-F1A').click();
+    await expect(pageA.getByTestId('open-tone-editor-btn')).toHaveCount(0);
     await pageA.getByTestId('filter-tab-user').click();
     await pageA.getByTestId('view-mode-stage-btn').click();
     await expect(pageA.getByTestId('stage-footswitch-deck')).toBeVisible();
@@ -196,5 +200,74 @@ test.describe('QuickTone Web Controller — Testes E2E Full-Stack (Playwright)',
       'data-connection-state',
       'connected',
     );
+  });
+
+  test('4. ToneEditorDrawer: focus trap (Tab/Shift+Tab), Escape em camadas, restauração de foco e alvos táteis mobile >= 44px', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 375, height: 812 });
+    await page.goto(baseUrl);
+
+    await expect(page.getByTestId('preset-card-1A')).toBeVisible();
+    await page.getByTestId('preset-card-1A').click();
+    mockMidi.simulateHardwareIncoming([0xb0, 0x3c, 0x00]);
+    await expect(page.getByTestId('open-tone-editor-btn')).toBeVisible();
+
+    // Altura tátil >= 44px nos chips clicáveis de StageDisplay no viewport mobile
+    const firstChipBox = await page
+      .locator('[data-testid="signal-chain-strip"] button[data-block="AMP"]')
+      .boundingBox();
+    expect(firstChipBox).not.toBeNull();
+    expect(firstChipBox!.height).toBeGreaterThanOrEqual(44);
+
+    // Zero overflow horizontal em 375px
+    const overflow = await page.evaluate(() => ({
+      scrollWidth: document.documentElement.scrollWidth,
+      innerWidth: window.innerWidth,
+    }));
+    expect(overflow.scrollWidth).toBeLessThanOrEqual(overflow.innerWidth);
+
+    // Abre editor via botão Criar novo timbre para testar rascunho dirty e focus trap
+    const createBtn = page.getByTestId('create-tone-btn');
+    await createBtn.focus();
+    await createBtn.click();
+
+    const drawer = page.getByTestId('experimental-edit-panel');
+    await expect(drawer).toBeVisible();
+    await expect(page.getByTestId('exp-preset-name-input')).toBeVisible();
+
+    // Focus trap mantém foco dentro do drawer em Tab e Shift+Tab
+    const closeBtn = page.getByTestId('close-tone-editor-btn');
+    await closeBtn.focus();
+    await page.keyboard.press('Shift+Tab');
+    const activeInsideAfterShiftTab = await drawer.evaluate((el) =>
+      el.contains(document.activeElement),
+    );
+    expect(activeInsideAfterShiftTab).toBe(true);
+
+    const saveBtn = page.getByTestId('exp-save-btn');
+    await saveBtn.focus();
+    await page.keyboard.press('Tab');
+    const activeInsideAfterTab = await drawer.evaluate((el) =>
+      el.contains(document.activeElement),
+    );
+    expect(activeInsideAfterTab).toBe(true);
+
+    // Escape em camadas: inline-save-panel -> fecha painel -> Escape -> abre dirty guard -> Escape -> fecha banner
+    await saveBtn.click();
+    await expect(page.getByTestId('inline-save-panel')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('inline-save-panel')).toHaveCount(0);
+
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('dirty-guard-banner')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('dirty-guard-banner')).toHaveCount(0);
+
+    // Descartar alterações fecha o drawer e restaura foco ao botão de abertura
+    await page.keyboard.press('Escape');
+    await page.getByTestId('confirm-discard-dirty-btn').click();
+    await expect(drawer).toHaveCount(0);
+    await expect(createBtn).toBeFocused();
   });
 });

@@ -237,7 +237,7 @@ describe('QuickTone Stage Hardware UI Components (unslop)', () => {
       fireEvent.click(screen.getByTestId('preset-card-2A'));
       await waitFor(() => {
         expect(screen.getByTestId('stage-display')).toHaveTextContent('Lead 80s');
-        expect(screen.getByTestId('stage-display')).toHaveTextContent('COMANDO ENVIADO');
+        expect(screen.getByTestId('stage-display')).toHaveTextContent('Enviando…');
       });
     });
 

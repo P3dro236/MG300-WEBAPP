@@ -633,4 +633,29 @@ describe('experimental preset edit API', () => {
     });
     expect(oversizedRes.statusCode).toBe(400);
   });
+
+  it('discards an active draft or imported preset cleanly via POST /api/experimental/discard', async () => {
+    app = buildApp(true);
+    await app.ready();
+
+    const createRes = await app.inject({
+      method: 'POST',
+      url: '/api/experimental/new',
+      payload: { presetName: 'Draft To Discard' },
+    });
+    expect(createRes.statusCode).toBe(200);
+    expect(createRes.json().loaded).toBe(true);
+    expect(createRes.json().dirty).toBe(true);
+
+    const discardRes = await app.inject({
+      method: 'POST',
+      url: '/api/experimental/discard',
+      payload: {},
+    });
+    expect(discardRes.statusCode).toBe(200);
+    expect(discardRes.json().loaded).toBe(false);
+    expect(discardRes.json().dirty).toBe(false);
+    expect(discardRes.json().sourceMode).toBe('hardware');
+    expect(discardRes.json().sourceFileName).toBeNull();
+  });
 });

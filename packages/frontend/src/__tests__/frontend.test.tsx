@@ -365,7 +365,7 @@ describe('@quicktone/frontend — Testes Unitários da Interface', () => {
     expect(screen.queryByTestId('preset-card-F1A')).not.toBeInTheDocument();
   });
 
-  it('2. Seleção de preset: clique dispara POST /api/presets/select, exibe "COMANDO ENVIADO" e atualiza para "CONFIRMADO"', async () => {
+  it('2. Seleção de preset: clique dispara POST /api/presets/select, exibe "Enviando…" e atualiza para "Ativo"', async () => {
     render(<App />);
 
     await waitFor(() => {
@@ -504,7 +504,7 @@ describe('@quicktone/frontend — Testes Unitários da Interface', () => {
       'connected',
     );
     expect(screen.getByTestId('midi-connection-badge')).toHaveTextContent(
-      'MIDI Desconectado',
+      'Pedaleira desconectada',
     );
   });
 
@@ -563,7 +563,8 @@ describe('@quicktone/frontend — Testes Unitários da Interface', () => {
         'data-ws-status',
         'connected',
       );
-      expect(screen.getByTestId('confirmed-preset-indicator')).toHaveTextContent('F1A');
+      expect(screen.getByTestId('stage-display')).toHaveTextContent('F1A');
+      expect(screen.queryByTestId('open-tone-editor-btn')).not.toBeInTheDocument();
       expect(screen.getByTestId('volume-value')).toHaveTextContent('85%');
     });
   });
@@ -1057,13 +1058,19 @@ describe('@quicktone/frontend — Testes Unitários da Interface', () => {
 
     render(<App />);
 
+    // Tela principal limpa: editor NÃO aparece montado no boot inicial
     await waitFor(() => {
-      expect(screen.getByTestId('experimental-load-btn')).toBeInTheDocument();
-      expect(screen.getByTestId('experimental-load-btn')).toHaveTextContent('Carregar Slot 4D');
-      expect(screen.getByTestId('experimental-load-btn')).not.toBeDisabled();
+      expect(screen.getByTestId('preset-card-1A')).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId('experimental-edit-panel')).not.toBeInTheDocument();
+
+    // Seleciona slot 1A para ativar "Editar timbre"
+    fireEvent.click(screen.getByTestId('preset-card-1A'));
+    await waitFor(() => {
+      expect(screen.getByTestId('open-tone-editor-btn')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByTestId('experimental-load-btn'));
+    fireEvent.click(screen.getByTestId('open-tone-editor-btn'));
     await waitFor(() => {
       expect(screen.getByTestId('exp-select-block-EQ')).toBeInTheDocument();
       expect(screen.getByTestId('exp-select-block-CAB')).toBeInTheDocument();
@@ -1105,7 +1112,7 @@ describe('@quicktone/frontend — Testes Unitários da Interface', () => {
       });
     });
 
-    // Seleciona aba Níveis e altera Patch Level
+    // Seleciona aba Níveis e altera Volume do timbre
     fireEvent.click(screen.getByTestId('exp-select-levels'));
     fireEvent.change(screen.getByTestId('exp-slider-patchVolume'), {
       target: { value: '88' },
@@ -1140,10 +1147,19 @@ describe('@quicktone/frontend — Testes Unitários da Interface', () => {
       expect(screen.getByTestId('exp-slider-patchVolume')).toHaveValue('72');
     });
 
-    // Fluxo Novo Preset -> editar nome -> abrir modal de gravação -> escolher 5A (sem Factory slots) -> confirmar
-    fireEvent.click(screen.getByTestId('exp-new-preset-btn'));
+    // Fecha o drawer: dirty guard pede confirmação antes de descartar alterações locais
+    fireEvent.click(screen.getByTestId('close-tone-editor-btn'));
+    await waitFor(() => {
+      expect(screen.getByTestId('dirty-guard-banner')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('confirm-discard-dirty-btn'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('experimental-edit-panel')).not.toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('create-tone-btn'));
     await waitFor(() => {
       expect(fetchCalls.some((c) => c.url === '/api/experimental/new')).toBe(true);
+      expect(screen.getByTestId('offline-draft-notice')).toBeInTheDocument();
     });
     fireEvent.change(screen.getByTestId('exp-preset-name-input'), {
       target: { value: 'Lead Stage' },
@@ -1152,7 +1168,7 @@ describe('@quicktone/frontend — Testes Unitários da Interface', () => {
 
     fireEvent.click(screen.getByTestId('exp-save-btn'));
     await waitFor(() => {
-      expect(screen.getByTestId('save-preset-modal')).toBeInTheDocument();
+      expect(screen.getByTestId('inline-save-panel')).toBeInTheDocument();
     });
     const saveSlotSelect = screen.getByTestId('save-target-slot-select');
     const optionValues = Array.from(saveSlotSelect.querySelectorAll('option')).map((o) => o.value);
@@ -1160,7 +1176,7 @@ describe('@quicktone/frontend — Testes Unitários da Interface', () => {
     expect(optionValues).not.toContain('36');
 
     fireEvent.change(saveSlotSelect, { target: { value: '16' } });
-    expect(screen.getByTestId('save-preset-modal')).toHaveTextContent('RG J. Mayer');
+    expect(screen.getByTestId('inline-save-panel')).toHaveTextContent('RG J. Mayer');
     fireEvent.click(screen.getByTestId('exp-confirm-save-btn'));
 
     await waitFor(() => {
@@ -1264,7 +1280,7 @@ describe('@quicktone/frontend — Testes Unitários da Interface', () => {
     });
   });
 
-  it('13. Regressões do editor: erro visível dentro do SavePresetModal, cancelamento de timers em transições (<400ms), BPM/toggle/select/bundle e sanitização de erro HTML', async () => {
+  it('13. Regressões do editor: erro visível dentro do ToneEditorDrawer, cancelamento de timers em transições (<400ms), BPM/toggle/select/bundle e sanitização de erro HTML', async () => {
     let expState: Record<string, unknown> = {
       slot: 15,
       loaded: false,
@@ -1330,6 +1346,7 @@ describe('@quicktone/frontend — Testes Unitários da Interface', () => {
         fetchCalls.push({ url, method, body });
         expState = {
           ...expState,
+          dirty: true,
           blockModels: {
             ...(expState.blockModels as Record<string, number>),
             [String(body.block)]: body.on ? 1 : 0,
@@ -1343,7 +1360,7 @@ describe('@quicktone/frontend — Testes Unitários da Interface', () => {
         const arr = [...(bp[String(body.block)] ?? [0, 0, 0, 0, 0, 0])];
         arr[body.index] = body.value;
         bp[String(body.block)] = arr;
-        expState = { ...expState, blockParams: bp };
+        expState = { ...expState, dirty: true, blockParams: bp };
         return new Response(JSON.stringify(expState), { status: 200 });
       }
       if (url.endsWith('/api/experimental/new')) {
@@ -1372,6 +1389,7 @@ describe('@quicktone/frontend — Testes Unitários da Interface', () => {
         fetchCalls.push({ url, method, body });
         expState = {
           ...expState,
+          dirty: true,
           presetName: body.presetName ?? expState.presetName,
           bpm: body.bpm ?? expState.bpm,
           timeFlag: body.timeFlag ?? expState.timeFlag,
@@ -1384,6 +1402,7 @@ describe('@quicktone/frontend — Testes Unitários da Interface', () => {
         expState = {
           ...expState,
           loaded: true,
+          dirty: true,
           sourceMode: 'imported',
           presetName: idx === 1 ? 'Pack B' : 'Pack A',
         };
@@ -1399,6 +1418,11 @@ describe('@quicktone/frontend — Testes Unitários da Interface', () => {
           }),
           { status: 200 },
         );
+      }
+      if (url.endsWith('/api/experimental/discard')) {
+        fetchCalls.push({ url, method, body });
+        expState = { ...expState, loaded: false, dirty: false };
+        return new Response(JSON.stringify(expState), { status: 200 });
       }
       if (url.endsWith('/api/experimental/save')) {
         fetchCalls.push({ url, method, body });
@@ -1427,14 +1451,18 @@ describe('@quicktone/frontend — Testes Unitários da Interface', () => {
     render(<App />);
 
     await waitFor(() => {
-      expect(screen.getByTestId('experimental-load-btn')).not.toBeDisabled();
+      expect(screen.getByTestId('preset-card-1A')).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByTestId('experimental-load-btn'));
+    fireEvent.click(screen.getByTestId('preset-card-1A'));
+    await waitFor(() => {
+      expect(screen.getByTestId('open-tone-editor-btn')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('open-tone-editor-btn'));
     await waitFor(() => {
       expect(screen.getByTestId('exp-slider-AMP-0')).toBeInTheDocument();
     });
 
-    // 1) Toggle AMP Bright (index 1) and select MOD Chorus+ Mode
+    // 1) Toggle AMP Bright (index 1)
     fireEvent.click(screen.getByTestId('exp-toggle-param-AMP-1'));
     await waitFor(() => {
       expect(fetchCalls).toContainEqual({
@@ -1444,12 +1472,12 @@ describe('@quicktone/frontend — Testes Unitários da Interface', () => {
       });
     });
 
-    // 2) Move fader and IMMEDIATELY (<400ms) click "Desligar Bloco": UI must switch to OFF and cancel pending fader send
+    // 2) Move fader and IMMEDIATELY (<400ms) click "Desligar": UI must switch to Ligar and cancel pending fader send
     const countBefore = fetchCalls.filter((c) => c.url === '/api/experimental/block-param').length;
     fireEvent.change(screen.getByTestId('exp-slider-AMP-0'), { target: { value: '99' } });
     fireEvent.click(screen.getByTestId('exp-toggle-block-AMP'));
     await waitFor(() => {
-      expect(screen.getByTestId('exp-toggle-block-AMP')).toHaveTextContent('Ligar Bloco');
+      expect(screen.getByTestId('exp-toggle-block-AMP')).toHaveTextContent('Ligar');
     });
     await new Promise((r) => setTimeout(r, 80));
     expect(fetchCalls.filter((c) => c.url === '/api/experimental/block-param')).toHaveLength(
@@ -1467,12 +1495,16 @@ describe('@quicktone/frontend — Testes Unitários da Interface', () => {
       expect(fetchCalls.some((c) => c.url === '/api/experimental/meta' && (c.body as { bpm?: number })?.bpm === 142)).toBe(true);
     });
 
-    // 4) Import 36-slot bundle and switch slot inside bundle
+    // 4) Import 36-slot bundle (now protected by dirty-guard!) and switch slot inside bundle
     const fileInput = screen.getByTestId('exp-import-input') as HTMLInputElement;
     const bundleFile = new File([new Uint8Array([1, 2, 3, 4])], 'MG300AllPreset.nuxpreset', {
       type: 'application/octet-stream',
     });
     fireEvent.change(fileInput, { target: { files: [bundleFile] } });
+    await waitFor(() => {
+      expect(screen.getByTestId('dirty-guard-banner')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('confirm-discard-dirty-btn'));
     await waitFor(() => {
       expect(screen.getByTestId('exp-bundle-slot-select')).toBeInTheDocument();
     });
@@ -1481,22 +1513,556 @@ describe('@quicktone/frontend — Testes Unitários da Interface', () => {
       expect((screen.getByTestId('exp-preset-name-input') as HTMLInputElement).value).toBe('Pack B');
     });
 
-    // 5) Save failure (HTML 502) surfaces sanitized error INSIDE SavePresetModal without leaking raw HTML
+    // 5) Save failure (HTML 502) surfaces sanitized error INSIDE Drawer footer without leaking raw HTML
     fireEvent.click(screen.getByTestId('exp-save-btn'));
     await waitFor(() => {
-      expect(screen.getByTestId('save-preset-modal')).toBeInTheDocument();
+      expect(screen.getByTestId('inline-save-panel')).toBeInTheDocument();
     });
     fireEvent.click(screen.getByTestId('exp-confirm-save-btn'));
     await waitFor(() => {
-      const modalErr = screen.getByTestId('save-modal-error');
-      expect(modalErr).toHaveTextContent('Erro na comunicação com o servidor (HTTP 502)');
-      expect(modalErr.textContent).not.toContain('<html>');
+      const drawerPanel = screen.getByTestId('experimental-edit-panel');
+      const alert = drawerPanel.querySelector('[role="alert"]');
+      expect(alert).toHaveTextContent('Erro na comunicação com o servidor (HTTP 502)');
+      expect(alert?.textContent).not.toContain('<html>');
     });
 
-    // Escape closes SavePresetModal when not saving
+    // Escape closes inline-save-panel first, then opens dirty guard, then discards cleanly
     fireEvent.keyDown(window, { key: 'Escape' });
     await waitFor(() => {
-      expect(screen.queryByTestId('save-preset-modal')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('inline-save-panel')).not.toBeInTheDocument();
+    });
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => {
+      expect(screen.getByTestId('dirty-guard-banner')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('confirm-discard-dirty-btn'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('experimental-edit-panel')).not.toBeInTheDocument();
+    });
+  });
+
+  it('14. Rascunho offline (Criar novo timbre) e .nuxpreset importado NÃO sobrescrevem os chips do StageDisplay', async () => {
+    currentPresetsResponse = buildPresetsResponse({
+      presets: [
+        {
+          ...MOCK_PRESETS[0]!,
+          signalChain: {
+            compEnabled: true,
+            efxEnabled: false,
+            ampEnabled: true,
+            irEnabled: true,
+            eqEnabled: false,
+            nrEnabled: true,
+            modEnabled: false,
+            dlyEnabled: true,
+            rvbEnabled: false,
+          },
+        },
+        ...MOCK_PRESETS.slice(1),
+      ],
+    });
+
+    let expState: Record<string, unknown> = {
+      slot: 0,
+      loaded: false,
+      busy: false,
+      dirty: false,
+      sourceMode: 'hardware',
+      sourceFileName: null,
+      presetName: null,
+      bpm: 120,
+      timeFlag: 0,
+      ampParams: [],
+      blocksEnabled: [],
+      blockModels: {},
+      blockParams: {},
+      cabEnabled: false,
+      cabModel: 0,
+      micModel: 0,
+      irCut: 0,
+      irVolume: 20,
+      patchVolume: 50,
+      hasUserIr: false,
+      userIrName: null,
+      userIrWarning: null,
+      lastSave: null,
+    };
+
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.endsWith('/api/experimental/state')) {
+        return new Response(JSON.stringify(expState), { status: 200 });
+      }
+      if (url.endsWith('/api/experimental/new')) {
+        expState = {
+          ...expState,
+          slot: 0,
+          loaded: true,
+          dirty: true,
+          sourceMode: 'draft',
+          presetName: 'Novo Timbre',
+          blockModels: { '1': 0, '2': 1, '3': 1, '4': 1, '5': 0, '6': 1, '7': 0, '8': 1, '9': 1, '10': 2 },
+        };
+        return new Response(JSON.stringify(expState), { status: 200 });
+      }
+      if (url.endsWith('/api/experimental/import')) {
+        expState = {
+          ...expState,
+          slot: 0,
+          loaded: true,
+          dirty: true,
+          sourceMode: 'imported',
+          presetName: 'Imported Rig',
+          blockModels: { '1': 0, '2': 1, '3': 1, '4': 1, '5': 0, '6': 1, '7': 0, '8': 1, '9': 1, '10': 2 },
+        };
+        return new Response(
+          JSON.stringify({ state: expState, importedCount: 1, selectedIndex: 0 }),
+          { status: 200 },
+        );
+      }
+      return origFetch(input, init);
+    }) as typeof fetch;
+
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByTestId('stage-display')).toHaveTextContent('EaglesDF Crunch');
+    });
+
+    const strip = screen.getByTestId('signal-chain-strip');
+    expect(strip.querySelector('[data-block="COMP"]')?.getAttribute('data-active')).toBe('true');
+    expect(strip.querySelector('[data-block="EFX"]')?.getAttribute('data-active')).toBe('false');
+    expect(strip.querySelector('[data-block="DLY"]')?.getAttribute('data-active')).toBe('true');
+
+    // Abre Criar novo timbre (draft com COMP=0, EFX=1, DLY=0) -> StageDisplay preserva o hardware 1A
+    fireEvent.click(screen.getByTestId('create-tone-btn'));
+    await waitFor(() => {
+      expect(screen.getByTestId('offline-draft-notice')).toBeInTheDocument();
+    });
+    expect(strip.querySelector('[data-block="COMP"]')?.getAttribute('data-active')).toBe('true');
+    expect(strip.querySelector('[data-block="EFX"]')?.getAttribute('data-active')).toBe('false');
+    expect(strip.querySelector('[data-block="DLY"]')?.getAttribute('data-active')).toBe('true');
+
+    // Importa .nuxpreset (aciona dirty-guard sobre o rascunho) -> StageDisplay continua preservando o hardware 1A
+    const fileInput = screen.getByTestId('exp-import-input') as HTMLInputElement;
+    const file = new File([new Uint8Array([1, 2, 3, 4])], 'rig.nuxpreset', {
+      type: 'application/octet-stream',
+    });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+    await waitFor(() => {
+      expect(screen.getByTestId('dirty-guard-banner')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('confirm-discard-dirty-btn'));
+    await waitFor(() => {
+      expect((screen.getByTestId('exp-preset-name-input') as HTMLInputElement).value).toBe('Imported Rig');
+    });
+    expect(strip.querySelector('[data-block="COMP"]')?.getAttribute('data-active')).toBe('true');
+    expect(strip.querySelector('[data-block="EFX"]')?.getAttribute('data-active')).toBe('false');
+    expect(strip.querySelector('[data-block="DLY"]')?.getAttribute('data-active')).toBe('true');
+  });
+
+  it('15. Descartar alterações ao fechar hardware editor recarrega slot limpo, limpa dirty e desativa beforeunload', async () => {
+    let expState: Record<string, unknown> = {
+      slot: 0,
+      loaded: false,
+      busy: false,
+      dirty: false,
+      sourceMode: 'hardware',
+      sourceFileName: null,
+      presetName: null,
+      bpm: 120,
+      timeFlag: 0,
+      ampParams: [],
+      blocksEnabled: [],
+      blockModels: {},
+      blockParams: {},
+      cabEnabled: true,
+      cabModel: 1,
+      micModel: 2,
+      irCut: 0,
+      irVolume: 20,
+      patchVolume: 50,
+      hasUserIr: false,
+      userIrName: null,
+      userIrWarning: null,
+      lastSave: null,
+    };
+
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      const method = (init?.method ?? 'GET').toUpperCase();
+      const body = init?.body ? JSON.parse(String(init.body)) : {};
+
+      if (url.endsWith('/api/experimental/state')) {
+        return new Response(JSON.stringify(expState), { status: 200 });
+      }
+      if (url.endsWith('/api/experimental/load')) {
+        fetchCalls.push({ url, method, body });
+        expState = {
+          ...expState,
+          slot: body.slot ?? 0,
+          loaded: true,
+          dirty: false,
+          sourceMode: 'hardware',
+          presetName: 'EaglesDF Crunch',
+          blockModels: { '1': 1, '2': 0, '3': 1, '4': 0, '5': 1, '6': 0, '7': 0, '8': 0, '9': 1, '10': 2 },
+          blockParams: { '3': [50, 0, 50, 50, 50, 50] },
+        };
+        return new Response(JSON.stringify(expState), { status: 200 });
+      }
+      if (url.endsWith('/api/experimental/block')) {
+        fetchCalls.push({ url, method, body });
+        expState = {
+          ...expState,
+          dirty: true,
+          blockModels: {
+            ...(expState.blockModels as Record<string, number>),
+            [String(body.block)]: body.on ? 1 : 0,
+          },
+        };
+        return new Response(JSON.stringify(expState), { status: 200 });
+      }
+      return origFetch(input, init);
+    }) as typeof fetch;
+
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByTestId('open-tone-editor-btn')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('open-tone-editor-btn'));
+    await waitFor(() => {
+      expect(screen.getByTestId('exp-toggle-block-AMP')).toBeInTheDocument();
+    });
+
+    // Suja estado de hardware desligando AMP -> StageDisplay acompanha e beforeunload fica ativo
+    fireEvent.click(screen.getByTestId('exp-toggle-block-AMP'));
+    await waitFor(() => {
+      expect(
+        screen.getByTestId('signal-chain-strip').querySelector('[data-block="AMP"]')?.getAttribute('data-active'),
+      ).toBe('false');
+    });
+
+    const dirtyEvent = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(dirtyEvent);
+    expect(dirtyEvent.defaultPrevented).toBe(true);
+
+    // Fechar e confirmar descarte recarrega o slot 0 da Flash e limpa beforeunload
+    const loadsBeforeDiscard = fetchCalls.filter((c) => c.url.endsWith('/api/experimental/load')).length;
+    fireEvent.click(screen.getByTestId('close-tone-editor-btn'));
+    expect(screen.getByTestId('dirty-guard-banner')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('confirm-discard-dirty-btn'));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('experimental-edit-panel')).not.toBeInTheDocument();
+      expect(fetchCalls.filter((c) => c.url.endsWith('/api/experimental/load'))).toHaveLength(
+        loadsBeforeDiscard + 1,
+      );
+    });
+
+    expect(
+      screen.getByTestId('signal-chain-strip').querySelector('[data-block="AMP"]')?.getAttribute('data-active'),
+    ).toBe('true');
+
+    const cleanEvent = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(cleanEvent);
+    expect(cleanEvent.defaultPrevented).toBe(false);
+  });
+
+  it('16. Dirty guard aciona em switch_slot, reload, import e troca de item editado em bundle (Continuar e Descartar)', async () => {
+    let expState: Record<string, unknown> = {
+      slot: 0,
+      loaded: false,
+      busy: false,
+      dirty: false,
+      sourceMode: 'hardware',
+      sourceFileName: null,
+      presetName: null,
+      bpm: 120,
+      timeFlag: 0,
+      ampParams: [],
+      blocksEnabled: [],
+      blockModels: {},
+      blockParams: {},
+      cabEnabled: true,
+      cabModel: 1,
+      micModel: 2,
+      irCut: 0,
+      irVolume: 20,
+      patchVolume: 50,
+      hasUserIr: false,
+      userIrName: null,
+      userIrWarning: null,
+      lastSave: null,
+    };
+
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      const method = (init?.method ?? 'GET').toUpperCase();
+      const body = init?.body ? JSON.parse(String(init.body)) : {};
+
+      if (url.endsWith('/api/experimental/state')) {
+        return new Response(JSON.stringify(expState), { status: 200 });
+      }
+      if (url.endsWith('/api/experimental/load')) {
+        fetchCalls.push({ url, method, body });
+        expState = {
+          ...expState,
+          slot: body.slot ?? 0,
+          loaded: true,
+          dirty: false,
+          sourceMode: 'hardware',
+          presetName: body.slot === 1 ? 'SCORPIONS' : 'EaglesDF Crunch',
+          blockModels: { '1': 1, '2': 0, '3': 1, '4': 0, '5': 1, '6': 0, '7': 0, '8': 0, '9': 1, '10': 2 },
+          blockParams: { '3': [50, 0, 50, 50, 50, 50] },
+        };
+        return new Response(JSON.stringify(expState), { status: 200 });
+      }
+      if (url.endsWith('/api/experimental/block')) {
+        fetchCalls.push({ url, method, body });
+        expState = {
+          ...expState,
+          dirty: true,
+          blockModels: {
+            ...(expState.blockModels as Record<string, number>),
+            [String(body.block)]: body.on ? 1 : 0,
+          },
+        };
+        return new Response(JSON.stringify(expState), { status: 200 });
+      }
+      if (url.endsWith('/api/experimental/import')) {
+        fetchCalls.push({ url, method, body });
+        const idx = body.bundleSlotIndex ?? 0;
+        expState = {
+          ...expState,
+          loaded: true,
+          dirty: true,
+          sourceMode: 'imported',
+          presetName: idx === 1 ? 'Pack B' : 'Pack A',
+          blockModels: { '1': 1, '2': 0, '3': 1, '4': 0, '5': 1, '6': 0, '7': 0, '8': 0, '9': 1, '10': 2 },
+          blockParams: { '3': [50, 0, 50, 50, 50, 50] },
+        };
+        return new Response(
+          JSON.stringify({
+            state: expState,
+            importedCount: 2,
+            selectedIndex: idx,
+            bundleSlots: [
+              { index: 0, slotIndex: 0, displayBank: '1A', name: 'Pack A', usesUserIr: false },
+              { index: 1, slotIndex: 1, displayBank: '1B', name: 'Pack B', usesUserIr: false },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      return origFetch(input, init);
+    }) as typeof fetch;
+
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByTestId('open-tone-editor-btn')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('open-tone-editor-btn'));
+    await waitFor(() => {
+      expect(screen.getByTestId('exp-toggle-block-AMP')).toBeInTheDocument();
+    });
+
+    // Dirty em slot 0 -> switch_slot para slot 1 dispara dirty-guard; "Continuar editando" cancela troca
+    fireEvent.click(screen.getByTestId('exp-toggle-block-AMP'));
+    await waitFor(() => {
+      expect(screen.getByTestId('exp-reload-slot-btn')).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByTestId('exp-load-slot-select'), { target: { value: '1' } });
+    expect(screen.getByTestId('dirty-guard-banner')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Continuar editando' }));
+    expect(screen.queryByTestId('dirty-guard-banner')).not.toBeInTheDocument();
+    expect(screen.getByTestId('experimental-edit-panel')).toHaveTextContent('1A');
+
+    // switch_slot confirmado troca para 1B
+    fireEvent.change(screen.getByTestId('exp-load-slot-select'), { target: { value: '1' } });
+    fireEvent.click(screen.getByTestId('confirm-discard-dirty-btn'));
+    await waitFor(() => {
+      expect(screen.getByTestId('experimental-edit-panel')).toHaveTextContent('1B');
+    });
+
+    // Dirty -> reload confirmado recarrega slot 1
+    fireEvent.click(screen.getByTestId('exp-toggle-block-AMP'));
+    await waitFor(() => {
+      expect(screen.getByTestId('exp-reload-slot-btn')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('exp-reload-slot-btn'));
+    expect(screen.getByTestId('dirty-guard-banner')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('confirm-discard-dirty-btn'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('exp-reload-slot-btn')).not.toBeInTheDocument();
+    });
+
+    // Dirty -> importar arquivo dispara dirty-guard
+    fireEvent.click(screen.getByTestId('exp-toggle-block-AMP'));
+    await waitFor(() => {
+      expect(screen.getByTestId('exp-reload-slot-btn')).toBeInTheDocument();
+    });
+    const fileInput = screen.getByTestId('exp-import-input') as HTMLInputElement;
+    const bundleFile = new File([new Uint8Array([1, 2, 3, 4])], 'bundle.nuxpreset', {
+      type: 'application/octet-stream',
+    });
+    fireEvent.change(fileInput, { target: { files: [bundleFile] } });
+    expect(screen.getByTestId('dirty-guard-banner')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('confirm-discard-dirty-btn'));
+    await waitFor(() => {
+      expect(screen.getByTestId('exp-bundle-slot-select')).toBeInTheDocument();
+    });
+
+    // Editar item do pacote -> trocar item no pacote dispara dirty-guard
+    fireEvent.click(screen.getByTestId('exp-toggle-block-AMP'));
+    await waitFor(() => {
+      expect(fetchCalls.some((c) => c.url.endsWith('/api/experimental/block'))).toBe(true);
+    });
+    fireEvent.change(screen.getByTestId('exp-bundle-slot-select'), { target: { value: '1' } });
+    expect(screen.getByTestId('dirty-guard-banner')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('confirm-discard-dirty-btn'));
+    await waitFor(() => {
+      expect((screen.getByTestId('exp-preset-name-input') as HTMLInputElement).value).toBe('Pack B');
+    });
+  });
+
+  it('17. Erros com !loaded (loadSlot rejeitado ou upload > 512 KB) ficam visíveis com role="alert" no ToneEditorDrawer', async () => {
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.endsWith('/api/experimental/state')) {
+        return new Response(
+          JSON.stringify({
+            slot: 0,
+            loaded: false,
+            busy: false,
+            dirty: false,
+            sourceMode: 'hardware',
+            sourceFileName: null,
+            presetName: null,
+            bpm: 120,
+            timeFlag: 0,
+            ampParams: [],
+            blocksEnabled: [],
+            blockModels: {},
+            blockParams: {},
+            cabEnabled: false,
+            cabModel: 0,
+            micModel: 0,
+            irCut: 0,
+            irVolume: 20,
+            patchVolume: 50,
+            hasUserIr: false,
+            userIrName: null,
+            userIrWarning: null,
+            lastSave: null,
+          }),
+          { status: 200 },
+        );
+      }
+      if (url.endsWith('/api/experimental/load')) {
+        return new Response(
+          JSON.stringify({ code: 'DEVICE_OFFLINE', message: 'Pedaleira desconectada ao carregar slot.' }),
+          { status: 503 },
+        );
+      }
+      return origFetch(input);
+    }) as typeof fetch;
+
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByTestId('open-tone-editor-btn')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('open-tone-editor-btn'));
+    await waitFor(() => {
+      const panel = screen.getByTestId('experimental-edit-panel');
+      expect(panel.querySelector('[role="alert"]')).toHaveTextContent(
+        'Pedaleira desconectada ao carregar slot.',
+      );
+    });
+
+    // Upload > 512 KB com !loaded também exibe alerta visível
+    const oversized = new File([new Uint8Array(520 * 1024)], 'huge.nuxpreset', {
+      type: 'application/octet-stream',
+    });
+    fireEvent.change(screen.getByTestId('exp-import-input'), { target: { files: [oversized] } });
+    await waitFor(() => {
+      const panel = screen.getByTestId('experimental-edit-panel');
+      expect(panel.querySelector('[role="alert"]')).toHaveTextContent('512 KB');
+    });
+  });
+
+  it('18. Preset de Fábrica (F1A) ativo: chips do StageDisplay não são botões, tecla "e" não abre editor e Criar novo timbre abre rascunho offline', async () => {
+    currentState = buildMockState({
+      confirmedState: {
+        presetId: 'F1A',
+        slotIndex: 36,
+        volume: 50,
+        volumeTarget: 'master_cc64',
+        confirmedAt: '2026-11-23T20:00:00.000Z',
+      },
+    });
+
+    const origFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.endsWith('/api/experimental/new')) {
+        return new Response(
+          JSON.stringify({
+            slot: 15,
+            loaded: true,
+            busy: false,
+            dirty: true,
+            sourceMode: 'draft',
+            sourceFileName: null,
+            presetName: 'Novo Timbre',
+            bpm: 120,
+            timeFlag: 0,
+            ampParams: [50, 0, 50, 50, 50, 50],
+            blocksEnabled: [false, false, true, false, true, false, false, false],
+            blockModels: { '1': 0, '2': 0, '3': 1, '4': 0, '5': 1, '6': 0, '7': 0, '8': 0, '9': 1, '10': 2 },
+            blockParams: { '3': [50, 0, 50, 50, 50, 50] },
+            cabEnabled: true,
+            cabModel: 1,
+            micModel: 2,
+            irCut: 0,
+            irVolume: 20,
+            patchVolume: 50,
+            hasUserIr: false,
+            userIrName: null,
+            userIrWarning: null,
+            lastSave: null,
+          }),
+          { status: 200 },
+        );
+      }
+      return origFetch(input);
+    }) as typeof fetch;
+
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByTestId('stage-display')).toHaveTextContent('F1A');
+    });
+
+    expect(screen.queryByTestId('open-tone-editor-btn')).not.toBeInTheDocument();
+    const strip = screen.getByTestId('signal-chain-strip');
+    expect(strip.querySelectorAll('button')).toHaveLength(0);
+    expect(strip.querySelectorAll('[data-block]')).toHaveLength(10);
+
+    // Atalho 'e' não deve abrir o drawer para preset de Fábrica
+    fireEvent.keyDown(window, { key: 'e' });
+    expect(screen.queryByTestId('experimental-edit-panel')).not.toBeInTheDocument();
+
+    // Criar novo timbre segue disponível e abre rascunho offline
+    fireEvent.click(screen.getByTestId('create-tone-btn'));
+    await waitFor(() => {
+      expect(screen.getByTestId('experimental-edit-panel')).toBeInTheDocument();
+      expect(screen.getByTestId('offline-draft-notice')).toBeInTheDocument();
     });
   });
 });
