@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadEnvFiles, MONOREPO_ROOT } from './env.js';
 import {
   type BackendAppOptions,
   createBackendApp,
@@ -50,6 +51,7 @@ export interface StartBackendServerOptions extends BackendAppOptions {
 export async function startBackendServer(
   options: StartBackendServerOptions = {},
 ): Promise<{ app: QuickToneBackendApp; address: string; port: number }> {
+  loadEnvFiles();
   const host = options.host ?? process.env.HOST ?? '0.0.0.0';
   const rawPort = options.port ?? Number(process.env.PORT ?? 3001);
   const port = Number.isInteger(rawPort) && rawPort >= 0 ? rawPort : 3001;
@@ -64,6 +66,7 @@ export async function startBackendServer(
     experimentalEdit:
       options.experimentalEdit ?? process.env.QUICKTONE_EXPERIMENTAL_EDIT !== '0',
     serverPort: port,
+    aiGearPath: options.aiGearPath ?? path.resolve(MONOREPO_ROOT, 'data', 'user-gear.json'),
     ...options,
     pairingOptions: {
       trustedDevicesPath: path.resolve(process.cwd(), 'data', 'trusted-devices.json'),
@@ -95,6 +98,7 @@ function isExecutedDirectly(): boolean {
 }
 
 if (isExecutedDirectly()) {
+  loadEnvFiles();
   void startBackendServer()
     .then(({ app, port }) => {
       const lanIps = getLocalLanAddresses();

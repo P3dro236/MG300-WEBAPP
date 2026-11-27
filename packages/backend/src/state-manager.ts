@@ -106,11 +106,13 @@ export class ControllerStateManager {
   private readonly fillMissingUserSlots: boolean;
   private readonly enableSysExSync: boolean;
   private readonly useFilesystemDiscovery: boolean;
+  private readonly presetsDirectoryOption: string | null;
   private authToken: string | null;
   private lanUrls: string[];
   private diskPresetsResponse: PresetsResponse;
   private presetsResponse: PresetsResponse;
   private readonly hardwarePresets = new Map<number, Preset>();
+  private readonly hardwareStructs = new Map<number, Uint8Array>();
   private initialized = false;
   private previousConnectionState: string = 'disconnected';
   private hardwareDumpFlushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -125,6 +127,7 @@ export class ControllerStateManager {
 
   constructor(options: ControllerStateManagerOptions = {}) {
     const includeFactory = options.includeFactoryPresets ?? true;
+    this.presetsDirectoryOption = options.presetsDirectory ?? null;
     this.useFilesystemDiscovery =
       options.discoveryService !== undefined ||
       (options.presetsDirectory !== undefined && options.presetsDirectory !== null);
@@ -242,6 +245,20 @@ export class ControllerStateManager {
 
   public getDiscoveryService(): QuickToneDiscoveryService {
     return this.discoveryService;
+  }
+
+  public getPresetsDirectory(): string | null {
+    return this.presetsResponse.directory ?? this.presetsDirectoryOption ?? null;
+  }
+
+  public getKnownUserStructs(): ReadonlyMap<number, Uint8Array> {
+    const copy = new Map<number, Uint8Array>();
+    for (const [slot, struct] of this.hardwareStructs.entries()) {
+      if (isValidMg300UserSlot(slot)) {
+        copy.set(slot, Uint8Array.from(struct));
+      }
+    }
+    return copy;
   }
 
   public getMidiService(): MidiService {
@@ -543,6 +560,7 @@ export class ControllerStateManager {
     if (slotIndex < 0 || slotIndex > 71) {
       return;
     }
+    this.hardwareStructs.set(slotIndex, Uint8Array.from(struct102));
     const preset = buildPresetFromStruct102(struct102, slotIndex, {
       origin: 'hardware',
     });
@@ -564,6 +582,7 @@ export class ControllerStateManager {
     if (!isValidMg300UserSlot(slotIndex)) {
       return;
     }
+    this.hardwareStructs.set(slotIndex, Uint8Array.from(struct102));
     const preset = buildPresetFromStruct102(struct102, slotIndex, {
       origin: 'hardware',
     });

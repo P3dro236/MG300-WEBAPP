@@ -719,7 +719,6 @@ export class ExperimentalEditService {
   public async save(targetSlot: number = this.activeSlot): Promise<ExperimentalSaveResult> {
     this.assertUserSlot(targetSlot);
     this.requireDraft();
-    const displayBank = slotIndexToBankCoordinate(targetSlot).displayBank;
 
     let result!: ExperimentalSaveResult;
     await this.runExclusive(async () => {
@@ -742,67 +741,112 @@ export class ExperimentalEditService {
       await this.requireMg300();
 
       const existingTarget = await this.readSlot(targetSlot);
-      const backupFullPath = this.writeBackup(targetSlot, existingTarget);
-      const backupFileName = path.basename(backupFullPath);
-
-      const safeDraft = sanitizeStruct102ForSysEx(draft);
-      const frame = buildMg300PresetWriteSysEx(safeDraft, targetSlot);
-
-      const ack = this.waitForAck(targetSlot);
-      try {
-        await this.midi.sendExperimentalPresetWrite(frame);
-      } catch (err) {
-        ack.cancel();
-        throw err;
-      }
-      const ackReceived = await ack.promise;
-      this.lastSaveAtMs = Date.now();
-
-      let mismatchedOffsets: number[] = [];
-      let readBack: Uint8Array | null = null;
-      if (ackReceived) {
-        await sleep(this.options.settleMs ?? 200);
-        readBack = await this.readSlot(targetSlot);
-        mismatchedOffsets = compareStruct102Readback(safeDraft, readBack, {
-          ignoreBlockHeaderOffsets: this.modelChangedSinceLoad,
-        });
-      }
-
-      const verified = ackReceived && mismatchedOffsets.length === 0;
-      if (verified && readBack) {
-        // Reload targetSlot into DSP RAM so subsequent live CCs edit the freshly saved slot.
-        await this.midi.selectMg300Preset(targetSlot);
-        await this.midi.queryGlobalStatus().catch(() => undefined);
-        this.draft = readBack;
-        this.draftGeneration += 1;
-        this.activeSlot = targetSlot;
-        this.sourceMode = 'hardware';
-        this.sourceFileName = null;
-        this.dirty = false;
-        this.modelChangedSinceLoad = false;
-        this.seedLastModelsFromDraft(readBack);
-        this.syncHardwareBaseline();
-        this.options.onPresetSaved?.(targetSlot, readBack);
-      }
-
-      result = {
+      result = await this.commitStruct102ToFlash(
         targetSlot,
-        displayBank,
-        ackReceived,
-        verified,
-        mismatchedOffsets,
-        backupPath: backupFileName,
-        savedAt: new Date().toISOString(),
-      };
-      this.lastSave = result;
-      this.logger.info('experimental-edit', 'User slot save finished', {
-        slot: targetSlot,
-        label: displayBank,
-        ackReceived,
-        verified,
-        mismatchedOffsets,
-        backupPath: backupFullPath,
+        existingTarget,
+        draft,
+        this.modelChangedSinceLoad,
+      );
+    });
+    return result;
+  }
+
+  /**
+   * Executes an exclusive read -> transform -> backup -> 0x0E write -> readback transaction
+   * on a User slot (`0..35`). If `transformFn` throws, no backup or Flash write is performed.
+   */
+  public async applyExternalTransform(
+    targetSlot: number,
+    transformFn: (existingTarget: Uint8Array) => Promise<Uint8Array> | Uint8Array,
+  ): Promise<{ saveResult: ExperimentalSaveResult; experimentalState: ExperimentalEditState }> {
+    this.assertUserSlot(targetSlot);
+
+    let saveResult!: ExperimentalSaveResult;
+    await this.runExclusive(async () => {
+      await this.requireMg300();
+      const existingTarget = await this.readSlot(targetSlot);
+      const nextStruct = await transformFn(Uint8Array.from(existingTarget));
+      saveResult = await this.commitStruct102ToFlash(
+        targetSlot,
+        existingTarget,
+        nextStruct,
+        true,
+      );
+    });
+
+    return {
+      saveResult,
+      experimentalState: this.getState(),
+    };
+  }
+
+  private async commitStruct102ToFlash(
+    targetSlot: number,
+    existingTarget: Uint8Array,
+    nextStruct: Uint8Array,
+    ignoreBlockHeaderOffsets: boolean,
+  ): Promise<ExperimentalSaveResult> {
+    const displayBank = slotIndexToBankCoordinate(targetSlot).displayBank;
+    const backupFullPath = this.writeBackup(targetSlot, existingTarget);
+    const backupFileName = path.basename(backupFullPath);
+
+    const safeDraft = sanitizeStruct102ForSysEx(nextStruct);
+    const frame = buildMg300PresetWriteSysEx(safeDraft, targetSlot);
+
+    const ack = this.waitForAck(targetSlot);
+    try {
+      await this.midi.sendExperimentalPresetWrite(frame);
+    } catch (err) {
+      ack.cancel();
+      throw err;
+    }
+    const ackReceived = await ack.promise;
+    this.lastSaveAtMs = Date.now();
+
+    let mismatchedOffsets: number[] = [];
+    let readBack: Uint8Array | null = null;
+    if (ackReceived) {
+      await sleep(this.options.settleMs ?? 200);
+      readBack = await this.readSlot(targetSlot);
+      mismatchedOffsets = compareStruct102Readback(safeDraft, readBack, {
+        ignoreBlockHeaderOffsets,
       });
+    }
+
+    const verified = ackReceived && mismatchedOffsets.length === 0;
+    if (verified && readBack) {
+      // Reload targetSlot into DSP RAM so subsequent live CCs edit the freshly saved slot.
+      await this.midi.selectMg300Preset(targetSlot);
+      await this.midi.queryGlobalStatus().catch(() => undefined);
+      this.draft = readBack;
+      this.draftGeneration += 1;
+      this.activeSlot = targetSlot;
+      this.sourceMode = 'hardware';
+      this.sourceFileName = null;
+      this.dirty = false;
+      this.modelChangedSinceLoad = false;
+      this.seedLastModelsFromDraft(readBack);
+      this.syncHardwareBaseline();
+      this.options.onPresetSaved?.(targetSlot, readBack);
+    }
+
+    const result: ExperimentalSaveResult = {
+      targetSlot,
+      displayBank,
+      ackReceived,
+      verified,
+      mismatchedOffsets,
+      backupPath: backupFileName,
+      savedAt: new Date().toISOString(),
+    };
+    this.lastSave = result;
+    this.logger.info('experimental-edit', 'User slot save finished', {
+      slot: targetSlot,
+      label: displayBank,
+      ackReceived,
+      verified,
+      mismatchedOffsets,
+      backupPath: backupFullPath,
     });
     return result;
   }

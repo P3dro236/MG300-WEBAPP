@@ -9,20 +9,31 @@ import Fastify, {
 import { WebSocket, WebSocketServer } from 'ws';
 import { ZodError } from 'zod';
 import {
+  AiToneApplyRequestSchema,
   ConfigurePresetsDirRequestSchema,
   ConnectMidiRequestSchema,
+  MG300_FACTORY_SLOT_MIN,
   type MidiErrorCode,
   PairingDecisionPayloadSchema,
   PairingPollPayloadSchema,
   PairingRequestPayloadSchema,
   RemoveTrustedDevicePayloadSchema,
   SelectPresetRequestSchema,
+  UpdateAiGearRequestSchema,
   UpdateVolumeRequestSchema,
   UpdateVolumeTargetRequestSchema,
   WsClientMessageSchema,
   type WsServerMessage,
 } from '@quicktone/shared';
 import { MidiServiceError } from '@quicktone/midi';
+import { AiToneService } from './ai/ai-tone-service.js';
+import { AiGearStore } from './ai/gear-store.js';
+import {
+  AiServiceError,
+  GeminiClient,
+  type GeminiClientLike,
+} from './ai/gemini-client.js';
+import { MONOREPO_ROOT } from './env.js';
 import {
   ExperimentalBlockModelRequestSchema,
   ExperimentalBlockParamRequestSchema,
@@ -124,6 +135,9 @@ export interface BackendAppOptions extends ControllerStateManagerOptions {
   /** Experimental branch: expose /api/experimental/* (default: env QUICKTONE_EXPERIMENTAL_EDIT=1). */
   experimentalEdit?: boolean;
   experimentalBackupDir?: string;
+  geminiClient?: GeminiClientLike;
+  aiGearPath?: string;
+  aiCalibrationDir?: string | null;
 }
 
 export type QuickToneBackendApp = FastifyInstance & {
@@ -589,6 +603,14 @@ export function createBackendApp(options: BackendAppOptions = {}): QuickToneBack
       });
     }
 
+    if (error instanceof AiServiceError) {
+      return reply.status(error.statusCode).send({
+        code: error.code,
+        message: error.message,
+        timestamp: error.timestamp,
+      });
+    }
+
     if (error instanceof PresetNotFoundError) {
       return reply.status(404).send({
         code: error.code,
@@ -930,6 +952,7 @@ export function createBackendApp(options: BackendAppOptions = {}): QuickToneBack
     };
   });
 
+  let experimentalService: ExperimentalEditService | null = null;
   if (experimentalEditEnabled) {
     const experimental = new ExperimentalEditService(stateManager.getMidiService(), {
       backupDir:
@@ -940,6 +963,7 @@ export function createBackendApp(options: BackendAppOptions = {}): QuickToneBack
         stateManager.applySavedHardwarePreset(slotIndex, struct102);
       },
     });
+    experimentalService = experimental;
 
     unsubscribeExperimentalState = experimental.onStateChange((state) => {
       broadcastWsMessage({
@@ -1011,6 +1035,83 @@ export function createBackendApp(options: BackendAppOptions = {}): QuickToneBack
       return experimental.discard();
     });
   }
+
+  const geminiClient: GeminiClientLike = options.geminiClient ?? new GeminiClient();
+  const gearStore = new AiGearStore({
+    filePath: options.aiGearPath ?? path.resolve(MONOREPO_ROOT, 'data', 'user-gear.json'),
+    geminiClient,
+  });
+
+  const requireAuthorizedRead = (request: FastifyRequest, reply: FastifyReply): boolean => {
+    if (
+      !authenticatedMobileRequests.has(request) &&
+      stateManager.isAuthRequired() &&
+      !stateManager.validateAuthToken(extractAuthTokenFromHeaders(request.headers))
+    ) {
+      void reply.status(401).send({
+        code: 'UNAUTHORIZED',
+        message:
+          'Autenticação necessária: forneça um token/PIN válido via header X-QuickTone-Token ou Authorization.',
+        timestamp: new Date().toISOString(),
+      });
+      return false;
+    }
+    return true;
+  };
+
+  fastify.get('/api/ai/gear', async (request, reply) => {
+    if (!requireAuthorizedRead(request, reply)) {
+      return;
+    }
+    return {
+      gear: gearStore.getGear(),
+    };
+  });
+
+  fastify.put('/api/ai/gear', async (request) => {
+    const payload = UpdateAiGearRequestSchema.parse(request.body ?? {});
+    const gear = await gearStore.validateAndSaveGear(payload);
+    broadcastWsMessage({
+      type: 'gear_updated',
+      gear,
+      timestamp: new Date().toISOString(),
+    });
+    return { gear };
+  });
+
+  const aiToneService = experimentalService
+    ? new AiToneService({
+        geminiClient,
+        gearStore,
+        stateManager,
+        experimentalEdit: experimentalService,
+        calibrationDir: options.aiCalibrationDir,
+      })
+    : null;
+
+  fastify.post('/api/ai/tone/apply', async (request) => {
+    const rawBody = (request.body ?? {}) as Record<string, unknown>;
+    if (
+      typeof rawBody.slotIndex === 'number' &&
+      Number.isInteger(rawBody.slotIndex) &&
+      rawBody.slotIndex >= MG300_FACTORY_SLOT_MIN
+    ) {
+      throw new AiServiceError(
+        'FACTORY_SLOT_PROTECTED',
+        'Apenas slots de Usuário (1A a 9D) podem ser alterados. Slots de Fábrica são protegidos.',
+        400,
+      );
+    }
+    const payload = AiToneApplyRequestSchema.parse(rawBody);
+    if (!aiToneService) {
+      throw new AiServiceError(
+        'EXPERIMENTAL_EDIT_DISABLED',
+        'A gravação de presets em Flash está desativada nesta instância do servidor.',
+        503,
+      );
+    }
+    return aiToneService.applyTone(payload);
+  });
 
   // Static Frontend Serving (SPA fallback when packages/frontend/dist exists)
   fastify.setNotFoundHandler(async (request, reply) => {
