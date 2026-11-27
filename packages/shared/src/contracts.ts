@@ -355,6 +355,79 @@ export const PairingDecisionPayloadSchema = z.object({
 });
 export type PairingDecisionPayload = z.infer<typeof PairingDecisionPayloadSchema>;
 
+// AI Tone Assistant & Musician Gear Contracts
+
+export const AiGearConfigSchema = z.object({
+  guitarModel: z.string(),
+  outputTarget: z.string(),
+  pickupSummary: z.string(),
+  recommendations: z.array(z.string()),
+  updatedAt: z.string(),
+});
+export type AiGearConfig = z.infer<typeof AiGearConfigSchema>;
+
+export const UpdateAiGearRequestSchema = z.object({
+  guitarModel: z.string().trim().min(2).max(100),
+  outputTarget: z.string().trim().max(120).optional().default(''),
+});
+export type UpdateAiGearRequest = z.infer<typeof UpdateAiGearRequestSchema>;
+
+export const AiGearStateResponseSchema = z.object({
+  gear: AiGearConfigSchema.nullable(),
+});
+export type AiGearStateResponse = z.infer<typeof AiGearStateResponseSchema>;
+
+export const AiToneIntentSchema = z.enum(['create_new', 'edit_existing']);
+export type AiToneIntent = z.infer<typeof AiToneIntentSchema>;
+
+export const AiAppliedBlockSummarySchema = z.object({
+  blockCode: z.string(),
+  enabled: z.boolean(),
+  modelName: z.string(),
+  params: z.array(
+    z.object({
+      label: z.string(),
+      value: z.union([z.number(), z.string()]),
+    }),
+  ),
+  changed: z.boolean().optional(),
+});
+export type AiAppliedBlockSummary = z.infer<typeof AiAppliedBlockSummarySchema>;
+
+export const AiOutputCalibrationSummarySchema = z.object({
+  source: z.enum(['hardware_user', 'nuxpreset_files', 'factory_default']),
+  sampleCount: z.number().int().nonnegative(),
+  avgPatchVolume: z.number(),
+  avgIrVolume: z.number(),
+  avgAmpLevel: z.number(),
+  appliedPatchVolume: z.number().int().min(0).max(100),
+  appliedIrVolume: z.number().int().min(0).max(40),
+  appliedAmpLevel: z.number().int().min(0).max(100),
+});
+export type AiOutputCalibrationSummary = z.infer<typeof AiOutputCalibrationSummarySchema>;
+
+export const AiToneApplyRequestSchema = z.object({
+  slotIndex: z.number().int().min(0).max(35),
+  prompt: z.string().trim().min(3).max(600),
+});
+export type AiToneApplyRequest = z.infer<typeof AiToneApplyRequestSchema>;
+
+export const AiToneApplyResponseSchema = z.object({
+  slotIndex: z.number().int().min(0).max(35),
+  displayBank: z.string(),
+  intent: AiToneIntentSchema,
+  presetName: z.string(),
+  bpm: z.number().int().min(40).max(240),
+  timeFlag: z.number().int().min(0).max(1),
+  summary: z.string(),
+  tips: z.array(z.string()),
+  appliedBlocks: z.array(AiAppliedBlockSummarySchema),
+  calibration: AiOutputCalibrationSummarySchema,
+  saveResult: ExperimentalSaveResultSchema,
+  experimentalState: ExperimentalEditStateSchema,
+});
+export type AiToneApplyResponse = z.infer<typeof AiToneApplyResponseSchema>;
+
 // WebSocket Messages
 
 export const WsServerMessageSchema = z.discriminatedUnion('type', [
@@ -383,6 +456,11 @@ export const WsServerMessageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('experimental_state_sync'),
     state: ExperimentalEditStateSchema,
+    timestamp: z.string(),
+  }),
+  z.object({
+    type: z.literal('gear_updated'),
+    gear: AiGearConfigSchema.nullable(),
     timestamp: z.string(),
   }),
   z.object({

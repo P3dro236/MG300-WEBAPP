@@ -407,3 +407,47 @@ export function isPresetWriteAck(bytes: readonly number[], slotIndex: number): b
     bytes[9] === 0xf7
   );
 }
+
+const EXPLICIT_SLOT_KEYWORD_REGEX =
+  /(?:^|[^A-Za-z0-9_])((?:slot|banco|bank|preset|patch)\s*(?:#|n[º°o]?\.?\s*)?(?:F?[1-9][A-D]|\d{1,2}))(?![A-Za-z0-9_+])/i;
+const BANK_CODE_CANDIDATE_REGEX =
+  /(?:^|[^A-Za-z0-9_+.-])(F?[1-9][A-D])(?![A-Za-z0-9_+])/gi;
+const SAFE_3D_BEFORE_REGEX =
+  /(?:efeito|som|audio|áudio|reverb|delay|chorus|stereo|estéreo|palco|espaço|espaco|ambiência|ambiencia|spatial|espacial|depth|profundidade)(?:\s+em)?\s+$/i;
+const SAFE_3D_AFTER_REGEX =
+  /^\s+(?:sound|effect|efeito|audio|áudio|reverb|delay|chorus|stereo|estéreo|space|espacial|spatial|ambience|ambiência|depth|soundstage|stage|palco)\b/i;
+
+/**
+ * Detects explicit references to a target preset/slot (e.g., `4C`, `F1A`, `preset 4C`, `slot 10`, `no 3D`)
+ * in a natural-language tone prompt while avoiding false positives on audio terms like `"efeito 3D"` / `"som 3D"`.
+ */
+export function containsForbiddenSlotMention(prompt: string): string | null {
+  if (!prompt || !prompt.trim()) {
+    return null;
+  }
+
+  const explicitMatch = EXPLICIT_SLOT_KEYWORD_REGEX.exec(prompt);
+  if (explicitMatch?.[1]) {
+    return explicitMatch[1].trim();
+  }
+
+  BANK_CODE_CANDIDATE_REGEX.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = BANK_CODE_CANDIDATE_REGEX.exec(prompt)) !== null) {
+    const token = match[1];
+    if (!token) {
+      continue;
+    }
+    if (token.toUpperCase() === '3D') {
+      const tokenStart = match.index + match[0].length - token.length;
+      const before = prompt.slice(0, tokenStart);
+      const after = prompt.slice(tokenStart + token.length);
+      if (SAFE_3D_BEFORE_REGEX.test(before) || SAFE_3D_AFTER_REGEX.test(after)) {
+        continue;
+      }
+    }
+    return token;
+  }
+
+  return null;
+}

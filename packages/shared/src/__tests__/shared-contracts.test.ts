@@ -39,6 +39,13 @@ import {
   classifyPresetCategory,
   isPlaceholderPreset,
   filterVisibleLibraryPresets,
+  containsForbiddenSlotMention,
+  AiGearConfigSchema,
+  UpdateAiGearRequestSchema,
+  AiGearStateResponseSchema,
+  AiToneApplyRequestSchema,
+  AiToneApplyResponseSchema,
+  WsServerMessageSchema,
 } from '../index.js';
 
 describe('@quicktone/shared — MG-300 Protocol & Contracts', () => {
@@ -483,5 +490,137 @@ describe('@quicktone/shared — MG-300 Protocol & Contracts', () => {
       lastSave: null,
     });
     expect(parsedSchema.bpm).toBe(128);
+  });
+
+  it('detects forbidden slot/preset mentions in AI prompts without false positives on 3D audio terms', () => {
+    expect(containsForbiddenSlotMention('Crie um timbre no slot 4C')).toBe('slot 4C');
+    expect(containsForbiddenSlotMention('Use o preset 5C como base')).toBe('preset 5C');
+    expect(containsForbiddenSlotMention('Coloca em 4C com delay')).toBe('4C');
+    expect(containsForbiddenSlotMention('Copia do F1A com mais ganho')).toBe('F1A');
+    expect(containsForbiddenSlotMention('Gravar no slot 10 por favor')).toBe('slot 10');
+    expect(containsForbiddenSlotMention('Ajustar no 3D com mais reverb')).toBe('3D');
+
+    expect(containsForbiddenSlotMention('Quero um timbre com efeito 3D e chorus aberto')).toBeNull();
+    expect(containsForbiddenSlotMention('Timbre espacial com som 3D e reverb hall')).toBeNull();
+    expect(containsForbiddenSlotMention('Som em 3D estilo ambient worship')).toBeNull();
+    expect(containsForbiddenSlotMention('Mesa Mark 2C+ lead com delay estereo')).toBeNull();
+    expect(containsForbiddenSlotMention('Clean estilo John Mayer com spring reverb')).toBeNull();
+  });
+
+  it('validates AI gear, tone apply, and gear_updated WebSocket contracts', () => {
+    const validGearReq = UpdateAiGearRequestSchema.parse({
+      guitarModel: '  Fender Stratocaster HSS  ',
+    });
+    expect(validGearReq).toEqual({
+      guitarModel: 'Fender Stratocaster HSS',
+      outputTarget: '',
+    });
+    expect(UpdateAiGearRequestSchema.safeParse({ guitarModel: 'A' }).success).toBe(false);
+
+    const sampleGear = AiGearConfigSchema.parse({
+      guitarModel: 'Fender Stratocaster HSS',
+      outputTarget: 'FRFR Headrush 108',
+      pickupSummary: 'HSS (ponte humbucker, meio e braco single-coil)',
+      recommendations: ['Use IR/CAB ativo para saida FRFR.'],
+      updatedAt: new Date().toISOString(),
+    });
+    expect(AiGearStateResponseSchema.parse({ gear: sampleGear }).gear?.guitarModel).toBe(
+      'Fender Stratocaster HSS',
+    );
+    expect(AiGearStateResponseSchema.parse({ gear: null }).gear).toBeNull();
+
+    expect(
+      AiToneApplyRequestSchema.safeParse({ slotIndex: 0, prompt: 'Blues quente' }).success,
+    ).toBe(true);
+    expect(
+      AiToneApplyRequestSchema.safeParse({ slotIndex: 35, prompt: 'Metal moderno' }).success,
+    ).toBe(true);
+    expect(
+      AiToneApplyRequestSchema.safeParse({ slotIndex: 36, prompt: 'Nao pode factory' }).success,
+    ).toBe(false);
+    expect(
+      AiToneApplyRequestSchema.safeParse({ slotIndex: 5, prompt: 'ok' }).success,
+    ).toBe(false);
+
+    const wsMsg = WsServerMessageSchema.parse({
+      type: 'gear_updated',
+      gear: sampleGear,
+      timestamp: new Date().toISOString(),
+    });
+    expect(wsMsg.type).toBe('gear_updated');
+
+    const applyResp = AiToneApplyResponseSchema.parse({
+      slotIndex: 15,
+      displayBank: '4D',
+      intent: 'create_new',
+      presetName: 'SRV Warm Blues',
+      bpm: 112,
+      timeFlag: 0,
+      summary: 'Timbre blues com Twin Rvb e T Screamer.',
+      tips: ['Use o captador do braco para base limpa.'],
+      appliedBlocks: [
+        {
+          blockCode: 'AMP',
+          enabled: true,
+          modelName: 'Twin Rvb',
+          params: [{ label: 'Gain', value: 42 }],
+          changed: true,
+        },
+      ],
+      calibration: {
+        source: 'hardware_user',
+        sampleCount: 4,
+        avgPatchVolume: 50,
+        avgIrVolume: 20,
+        avgAmpLevel: 70,
+        appliedPatchVolume: 50,
+        appliedIrVolume: 20,
+        appliedAmpLevel: 68,
+      },
+      saveResult: {
+        targetSlot: 15,
+        displayBank: '4D',
+        ackReceived: true,
+        verified: true,
+        mismatchedOffsets: [],
+        backupPath: 'slot-15-backup.json',
+        savedAt: new Date().toISOString(),
+      },
+      experimentalState: {
+        slot: 15,
+        loaded: true,
+        busy: false,
+        dirty: false,
+        sourceMode: 'hardware',
+        sourceFileName: null,
+        presetName: 'SRV Warm Blues',
+        bpm: 112,
+        timeFlag: 0,
+        ampParams: [42, 1, 68, 55, 58, 60],
+        blocksEnabled: [false, true, true, false, true, false, false, true],
+        blockModels: { '1': 0, '2': 5, '3': 5, '4': 0, '5': 1, '6': 0, '7': 0, '8': 4, '9': 5, '10': 2 },
+        blockParams: {
+          '1': [50, 50, 0, 0, 0, 0],
+          '2': [55, 58, 45, 0, 0, 0],
+          '3': [42, 1, 68, 55, 58, 60],
+          '4': [50, 50, 50, 50, 50, 50],
+          '5': [40, 30, 0, 0, 0, 0],
+          '6': [50, 50, 50, 0, 0, 0],
+          '7': [50, 35, 35, 0, 0, 0],
+          '8': [32, 42, 0, 0, 0, 0],
+        },
+        cabEnabled: true,
+        cabModel: 5,
+        micModel: 2,
+        irCut: 0,
+        irVolume: 20,
+        patchVolume: 50,
+        hasUserIr: false,
+        userIrName: null,
+        userIrWarning: null,
+        lastSave: null,
+      },
+    });
+    expect(applyResp.displayBank).toBe('4D');
   });
 });
