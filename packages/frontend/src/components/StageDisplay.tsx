@@ -1,5 +1,5 @@
 import React from 'react';
-import { Plus, SlidersHorizontal } from 'lucide-react';
+import { Plus, SlidersHorizontal, Sparkles } from 'lucide-react';
 import {
   type ConfirmedDeviceState,
   type DeviceSyncStatus,
@@ -20,6 +20,7 @@ interface StageDisplayProps {
   canOpenEditor?: boolean;
   onEditActiveTone?: (initialBlockId?: number) => void;
   onCreateNewTone?: () => void;
+  onOpenAiTone?: () => void;
   onPreloadEditor?: () => void;
 }
 
@@ -65,6 +66,7 @@ export const StageDisplay: React.FC<StageDisplayProps> = ({
   canOpenEditor = false,
   onEditActiveTone,
   onCreateNewTone,
+  onOpenAiTone,
   onPreloadEditor,
 }) => {
   const isPending =
@@ -152,7 +154,7 @@ export const StageDisplay: React.FC<StageDisplayProps> = ({
             </h1>
           </div>
 
-          {canOpenEditor && (onEditActiveTone || onCreateNewTone) ? (
+          {canOpenEditor && (onEditActiveTone || onCreateNewTone || onOpenAiTone) ? (
             <div className="flex flex-wrap items-center gap-2">
               {isUserPreset && onEditActiveTone ? (
                 <button
@@ -179,6 +181,18 @@ export const StageDisplay: React.FC<StageDisplayProps> = ({
                 >
                   <Plus className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
                   <span>Criar novo timbre</span>
+                </button>
+              ) : null}
+
+              {onOpenAiTone ? (
+                <button
+                  type="button"
+                  data-testid="open-ai-tone-btn"
+                  onClick={onOpenAiTone}
+                  className="inline-flex min-h-[44px] items-center gap-1.5 rounded-[var(--radius-md)] border border-accent-border bg-bg-elevated px-3.5 font-sans text-xs font-semibold text-text-primary transition-colors duration-150 hover:border-accent lg:min-h-[38px] cursor-pointer"
+                >
+                  <Sparkles className="h-4 w-4 text-accent" strokeWidth={1.75} aria-hidden="true" />
+                  <span>Criar timbre com IA</span>
                 </button>
               ) : null}
             </div>

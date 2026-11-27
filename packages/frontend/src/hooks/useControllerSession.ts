@@ -1,13 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  type AiGearConfig,
+  type AiToneApplyRequest,
+  type AiToneApplyResponse,
   type AppErrorRecord,
   type ControllerState,
   type ExperimentalEditState,
   type PairingStatusResponse,
   type Preset,
   type PresetsResponse,
+  type UpdateAiGearRequest,
   filterVisibleLibraryPresets,
   isPlaceholderPreset,
+  slotIndexToBankCoordinate,
 } from '@quicktone/shared';
 import {
   QuickToneApiClient,
@@ -83,6 +88,7 @@ export function useControllerSession({
   const [isConnectingMidi, setIsConnectingMidi] = useState(false);
   const [isReloadingPresets, setIsReloadingPresets] = useState(false);
   const [wsReconnectEpoch, setWsReconnectEpoch] = useState(0);
+  const [aiGear, setAiGear] = useState<AiGearConfig | null>(null);
 
   const initialLoadInFlightRef = useRef<Promise<void> | null>(null);
   const lastVolumeCommandAtRef = useRef<number>(0);
@@ -157,9 +163,14 @@ export function useControllerSession({
 
     const promise = (async () => {
       try {
-        const [status, presets] = await Promise.all([client.getState(), client.getPresets()]);
+        const [status, presets, gearResponse] = await Promise.all([
+          client.getState(),
+          client.getPresets(),
+          client.getAiGear().catch(() => ({ gear: null })),
+        ]);
         setControllerState(status);
         setHasLoadedInitialState(true);
+        setAiGear(gearResponse.gear ?? null);
 
         const realIncoming = presets.presets.filter((p) => !isPlaceholderPreset(p));
         if (realIncoming.length > 0) {
@@ -303,6 +314,8 @@ export function useControllerSession({
           for (const listener of experimentalListenersRef.current) {
             listener(message.state);
           }
+        } else if (message.type === 'gear_updated') {
+          setAiGear(message.gear);
         } else if (message.type === 'error') {
           setUiError(message.error);
         }
@@ -493,6 +506,81 @@ export function useControllerSession({
     }
   }, [client, applyMergedPresets]);
 
+  const saveAiGear = useCallback(
+    async (payload: UpdateAiGearRequest): Promise<AiGearConfig> => {
+      const res = await client.updateAiGear(payload);
+      setAiGear(res.gear);
+      if (!res.gear) {
+        throw new Error('Configuração de equipamento não retornada pelo servidor.');
+      }
+      return res.gear;
+    },
+    [client],
+  );
+
+  const applyAiTone = useCallback(
+    async (payload: AiToneApplyRequest): Promise<AiToneApplyResponse> => {
+      const result = await client.applyAiTone(payload);
+      if (result.experimentalState) {
+        for (const listener of experimentalListenersRef.current) {
+          listener(result.experimentalState);
+        }
+      }
+
+      const coord = slotIndexToBankCoordinate(result.slotIndex);
+      const blocksEnabled = result.experimentalState?.blocksEnabled ?? [];
+      const updatedPreset: Preset = {
+        id: result.displayBank,
+        slotIndex: result.slotIndex,
+        bankType: 'user',
+        bankNumber: coord.bankNumber,
+        patchLetter: coord.patchLetter,
+        displayBank: result.displayBank,
+        name: result.presetName,
+        patchVolume: result.experimentalState?.patchVolume ?? result.calibration.appliedPatchVolume,
+        irVolume: result.experimentalState?.irVolume ?? result.calibration.appliedIrVolume,
+        origin: 'hardware',
+        signalChain: {
+          compEnabled: Boolean(blocksEnabled[1]),
+          efxEnabled: Boolean(blocksEnabled[2]),
+          ampEnabled: Boolean(blocksEnabled[3]),
+          eqEnabled: Boolean(blocksEnabled[4]),
+          nrEnabled: Boolean(blocksEnabled[5]),
+          modEnabled: Boolean(blocksEnabled[6]),
+          dlyEnabled: Boolean(blocksEnabled[7]),
+          rvbEnabled: Boolean(blocksEnabled[8]),
+          irEnabled: Boolean(blocksEnabled[9]),
+        },
+        isDuplicate: false,
+        updatedAt: result.saveResult.savedAt,
+        midiMapping: {
+          protocol: 'mg300-cc60',
+          channel: 0,
+          ccNumber: 60,
+          ccValue: result.slotIndex,
+        },
+      };
+
+      setAllSlotPresets((prev) => {
+        const next = prev.filter((p) => p.slotIndex !== updatedPreset.slotIndex);
+        next.push(updatedPreset);
+        return next.sort((a, b) => a.slotIndex - b.slotIndex);
+      });
+
+      setPresetsResponse((prev) => {
+        const merged = mergePresetsSafely(prev.presets, [updatedPreset]);
+        persistState(merged);
+        return {
+          ...prev,
+          presets: merged,
+        };
+      });
+
+      return result;
+    },
+    [client, persistState],
+  );
+
   const visiblePresets = useMemo(
     () => filterVisibleLibraryPresets(presetsResponse.presets),
     [presetsResponse.presets],
@@ -551,6 +639,7 @@ export function useControllerSession({
     isConnectingMidi,
     isReloadingPresets,
     wsReconnectEpoch,
+    aiGear,
     setUiError,
     handleChangeFilter,
     handleChangeViewMode,
@@ -561,6 +650,8 @@ export function useControllerSession({
     handleVolumeInteractionStart,
     handleVolumeInteractionEnd,
     handleReloadPresets,
+    saveAiGear,
+    applyAiTone,
     subscribeExperimentalSync,
   };
 }

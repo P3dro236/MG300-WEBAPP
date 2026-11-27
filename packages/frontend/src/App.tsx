@@ -9,6 +9,7 @@ import { StageDisplay } from './components/StageDisplay';
 import { VolumeSlider } from './components/VolumeSlider';
 import { PresetGrid } from './components/PresetGrid';
 import { SettingsModal } from './components/SettingsModal';
+import { AiToneModal } from './components/AiToneModal';
 import type { EditorTab } from './components/ToneEditorDrawer';
 import { usePairingSession } from './hooks/usePairingSession';
 import { useControllerSession } from './hooks/useControllerSession';
@@ -34,6 +35,7 @@ export function App({ reconnectBaseDelayMs }: AppProps = {}): React.ReactElement
   const client = apiClientRef.current;
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [aiModalOpen, setAiModalOpen] = useState(false);
   const [editorDrawerOpen, setEditorDrawerOpen] = useState(false);
   const [editorInitialTab, setEditorInitialTab] = useState<EditorTab>(3);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -115,6 +117,24 @@ export function App({ reconnectBaseDelayMs }: AppProps = {}): React.ReactElement
     setEditorDrawerOpen(false);
   }, []);
 
+  const handleOpenAiTone = useCallback((): void => {
+    setAiModalOpen(true);
+  }, []);
+
+  const handleCloseAiTone = useCallback((): void => {
+    setAiModalOpen(false);
+  }, []);
+
+  const handleOpenAiResultInEditor = useCallback(
+    (slotIndex: number): void => {
+      setAiModalOpen(false);
+      setEditorInitialTab(3);
+      setEditorDrawerOpen(true);
+      void loadSlot(slotIndex);
+    },
+    [loadSlot],
+  );
+
   const handleConnectMidiDefault = useCallback((): void => {
     void handleConnectMidi();
   }, [handleConnectMidi]);
@@ -160,7 +180,7 @@ export function App({ reconnectBaseDelayMs }: AppProps = {}): React.ReactElement
 
   // Keyboard shortcuts on desktop when no dialog/input is capturing focus
   useEffect(() => {
-    if (!pairing.isAuthorized || editorDrawerOpen || isSettingsOpen) {
+    if (!pairing.isAuthorized || editorDrawerOpen || isSettingsOpen || aiModalOpen) {
       return;
     }
     const handleKeyDown = (event: KeyboardEvent): void => {
@@ -215,6 +235,7 @@ export function App({ reconnectBaseDelayMs }: AppProps = {}): React.ReactElement
     pairing.isAuthorized,
     editorDrawerOpen,
     isSettingsOpen,
+    aiModalOpen,
     activePreset,
     controllerState.connectionState,
     visiblePresets,
@@ -308,6 +329,7 @@ export function App({ reconnectBaseDelayMs }: AppProps = {}): React.ReactElement
           canOpenEditor={pairing.isAuthorized}
           onEditActiveTone={handleOpenEditActiveTone}
           onCreateNewTone={handleOpenCreateTone}
+          onOpenAiTone={handleOpenAiTone}
           onPreloadEditor={handlePreloadEditor}
         />
 
@@ -364,6 +386,7 @@ export function App({ reconnectBaseDelayMs }: AppProps = {}): React.ReactElement
         pendingRequests={pairing.pairingStatus.pendingRequests}
         activeChallenge={pairing.pairingStatus.activeChallenge}
         trustedDevices={pairing.pairingStatus.trustedDevices}
+        aiGear={controller.aiGear}
         onClose={handleCloseSettings}
         onConnectMidiPort={handleConnectMidiPort}
         onGeneratePairingQr={pairing.handleGeneratePairingQr}
@@ -372,6 +395,20 @@ export function App({ reconnectBaseDelayMs }: AppProps = {}): React.ReactElement
         onRevokeMobileSession={pairing.handleRevokeMobileSession}
         onLogoutMobileSession={handleLogoutMobile}
         onRemoveTrustedDevice={pairing.handleRemoveTrustedDevice}
+        onSaveAiGear={controller.saveAiGear}
+      />
+
+      <AiToneModal
+        isOpen={aiModalOpen}
+        presets={controller.allSlotPresets}
+        activePreset={activePreset}
+        confirmedSlotIndex={controllerState.confirmedState.slotIndex}
+        aiGear={controller.aiGear}
+        midiDisabled={midiDisconnected}
+        onClose={handleCloseAiTone}
+        onSaveAiGear={controller.saveAiGear}
+        onApplyAiTone={controller.applyAiTone}
+        onOpenInEditor={handleOpenAiResultInEditor}
       />
     </div>
   );

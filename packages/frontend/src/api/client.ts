@@ -1,4 +1,7 @@
 import {
+  type AiGearStateResponse,
+  type AiToneApplyRequest,
+  type AiToneApplyResponse,
   type AppErrorRecord,
   type ConnectMidiRequest,
   type ControllerState,
@@ -19,6 +22,7 @@ import {
   type SelectPresetRequest,
   type SentCommandRecord,
   type TrustedDeviceInfo,
+  type UpdateAiGearRequest,
   type UpdateVolumeRequest,
   type WsClientMessage,
   type WsServerMessage,
@@ -552,6 +556,39 @@ export class QuickToneApiClient {
     return this.request('/api/experimental/discard', {
       method: 'POST',
       body: JSON.stringify({}),
+    });
+  }
+
+  // AI Tone Assistant & Musician Gear API
+
+  /** Returns `{ gear: null }` when `/api/ai/gear` is absent (404) so legacy mocks never fail. */
+  public async getAiGear(): Promise<AiGearStateResponse> {
+    try {
+      const data = await this.request<Partial<AiGearStateResponse> | null>('/api/ai/gear', {
+        method: 'GET',
+      });
+      return {
+        gear: data && typeof data === 'object' && 'gear' in data ? (data.gear ?? null) : null,
+      };
+    } catch (err) {
+      if (err instanceof QuickToneApiError && err.status === 404) {
+        return { gear: null };
+      }
+      throw err;
+    }
+  }
+
+  public updateAiGear(payload: UpdateAiGearRequest): Promise<AiGearStateResponse> {
+    return this.request<AiGearStateResponse>('/api/ai/gear', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  public applyAiTone(payload: AiToneApplyRequest): Promise<AiToneApplyResponse> {
+    return this.request<AiToneApplyResponse>('/api/ai/tone/apply', {
+      method: 'POST',
+      body: JSON.stringify(payload),
     });
   }
 }

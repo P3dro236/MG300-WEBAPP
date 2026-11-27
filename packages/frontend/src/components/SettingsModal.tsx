@@ -1,12 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { X } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Guitar, X } from 'lucide-react';
 import type {
+  AiGearConfig,
   MidiPortInfo,
   PairingChallengeInfo,
   PairingSessionInfo,
   PendingPairingRequest,
   TrustedDeviceInfo,
+  UpdateAiGearRequest,
 } from '@quicktone/shared';
+import { QuickToneApiError } from '../api/client';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import { QrCodeSvg } from './QrCodeSvg';
 
@@ -20,6 +23,7 @@ interface SettingsModalProps {
   pendingRequests: PendingPairingRequest[];
   activeChallenge: PairingChallengeInfo | null;
   trustedDevices?: TrustedDeviceInfo[];
+  aiGear?: AiGearConfig | null;
   onClose: () => void;
   onConnectMidiPort: (portName: string) => void;
   onGeneratePairingQr: () => Promise<void>;
@@ -28,6 +32,7 @@ interface SettingsModalProps {
   onRevokeMobileSession: () => Promise<void>;
   onLogoutMobileSession: () => Promise<void>;
   onRemoveTrustedDevice?: (deviceId: string) => Promise<void>;
+  onSaveAiGear?: (payload: UpdateAiGearRequest) => Promise<AiGearConfig>;
 }
 
 function formatSecondsRemaining(expiresAt: string | undefined, nowMs: number): number {
@@ -46,6 +51,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   pendingRequests,
   activeChallenge,
   trustedDevices = [],
+  aiGear = null,
   onClose,
   onConnectMidiPort,
   onGeneratePairingQr,
@@ -54,6 +60,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onRevokeMobileSession,
   onLogoutMobileSession,
   onRemoveTrustedDevice,
+  onSaveAiGear,
 }) => {
   const [selectedPort, setSelectedPort] = useState(
     connectedPortName ?? availablePorts[0]?.name ?? '',
@@ -61,6 +68,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [generatingQr, setGeneratingQr] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [guitarInput, setGuitarInput] = useState(aiGear?.guitarModel ?? '');
+  const [outputInput, setOutputInput] = useState(aiGear?.outputTarget ?? '');
+  const [gearDirty, setGearDirty] = useState(false);
+  const [savingGear, setSavingGear] = useState(false);
+  const [gearError, setGearError] = useState<string | null>(null);
+  const [gearSavedNotice, setGearSavedNotice] = useState(false);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const wasOpenRef = useRef(false);
 
@@ -70,6 +83,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     const justOpened = isOpen && !wasOpenRef.current;
     wasOpenRef.current = isOpen;
     if (!isOpen) return;
+    if (justOpened) {
+      setGuitarInput(aiGear?.guitarModel ?? '');
+      setOutputInput(aiGear?.outputTarget ?? '');
+      setGearDirty(false);
+      setGearError(null);
+      setGearSavedNotice(false);
+    }
     setSelectedPort((prev) => {
       const prevStillAvailable = Boolean(prev) && availablePorts.some((p) => p.name === prev);
       if (!justOpened && prevStillAvailable) {
@@ -77,7 +97,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       }
       return connectedPortName ?? availablePorts[0]?.name ?? '';
     });
-  }, [connectedPortName, availablePorts, isOpen]);
+  }, [connectedPortName, availablePorts, isOpen, aiGear?.guitarModel, aiGear?.outputTarget]);
+
+  useEffect(() => {
+    if (!isOpen || gearDirty || savingGear) return;
+    setGuitarInput(aiGear?.guitarModel ?? '');
+    setOutputInput(aiGear?.outputTarget ?? '');
+  }, [isOpen, gearDirty, savingGear, aiGear]);
 
   useEffect(() => {
     if (!isOpen || !activeChallenge) {
@@ -111,6 +137,43 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       await onGeneratePairingQr();
     } finally {
       setGeneratingQr(false);
+    }
+  };
+
+  const handleSaveGearSubmit = async (event: React.FormEvent): Promise<void> => {
+    event.preventDefault();
+    if (savingGear) return;
+    const trimmedGuitar = guitarInput.trim();
+    if (trimmedGuitar.length < 2) {
+      setGearError('Informe o modelo da guitarra (mínimo 2 caracteres).');
+      setGearSavedNotice(false);
+      return;
+    }
+    if (!onSaveAiGear) {
+      return;
+    }
+    setSavingGear(true);
+    setGearError(null);
+    setGearSavedNotice(false);
+    try {
+      const saved = await onSaveAiGear({
+        guitarModel: trimmedGuitar,
+        outputTarget: outputInput.trim(),
+      });
+      setGuitarInput(saved.guitarModel);
+      setOutputInput(saved.outputTarget);
+      setGearDirty(false);
+      setGearSavedNotice(true);
+    } catch (err) {
+      setGearError(
+        err instanceof QuickToneApiError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : 'Falha ao validar e salvar o equipamento.',
+      );
+    } finally {
+      setSavingGear(false);
     }
   };
 
@@ -206,6 +269,147 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </button>
             </div>
           </div>
+
+          {/* Equipamento do Músico (IA) — visível e editável em Desktop e Mobile */}
+          <section
+            data-testid="ai-gear-settings-section"
+            aria-labelledby="ai-gear-settings-heading"
+            className="flex flex-col gap-3 border-t border-border-subtle pt-5"
+          >
+            <div className="flex items-start gap-2">
+              <Guitar
+                className="mt-0.5 h-4 w-4 shrink-0 text-accent"
+                strokeWidth={1.75}
+                aria-hidden="true"
+              />
+              <div>
+                <h3
+                  id="ai-gear-settings-heading"
+                  className="font-mono text-xs font-semibold uppercase tracking-wider text-text-primary"
+                >
+                  Equipamento do Músico (IA)
+                </h3>
+                <p className="mt-0.5 font-sans text-xs text-text-muted">
+                  Sincronizado entre computador e celular para calibrar ganho, EQ e IR dos timbres gerados.
+                </p>
+              </div>
+            </div>
+
+            <form onSubmit={(e) => void handleSaveGearSubmit(e)} className="flex flex-col gap-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="flex flex-col gap-1.5">
+                  <label
+                    htmlFor="ai-gear-guitar-input"
+                    className="font-mono text-[11px] font-semibold uppercase tracking-wider text-text-muted"
+                  >
+                    Modelo da guitarra *
+                  </label>
+                  <input
+                    id="ai-gear-guitar-input"
+                    data-testid="ai-gear-guitar-input"
+                    type="text"
+                    value={guitarInput}
+                    onChange={(e) => {
+                      setGuitarInput(e.target.value);
+                      setGearDirty(true);
+                      setGearSavedNotice(false);
+                      if (gearError) setGearError(null);
+                    }}
+                    placeholder="Ex.: Fender Stratocaster HSS, Les Paul..."
+                    disabled={savingGear}
+                    className="min-h-[44px] w-full rounded-[var(--radius-md)] border border-border-strong bg-bg-recess px-3 font-sans text-xs text-text-primary placeholder:text-text-dim disabled:opacity-50"
+                  />
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <label
+                    htmlFor="ai-gear-output-input"
+                    className="font-mono text-[11px] font-semibold uppercase tracking-wider text-text-muted"
+                  >
+                    Saída / amplificação
+                  </label>
+                  <input
+                    id="ai-gear-output-input"
+                    data-testid="ai-gear-output-input"
+                    type="text"
+                    value={outputInput}
+                    onChange={(e) => {
+                      setOutputInput(e.target.value);
+                      setGearDirty(true);
+                      setGearSavedNotice(false);
+                      if (gearError) setGearError(null);
+                    }}
+                    placeholder="Caixa ativa FRFR, fone de ouvido, amp..."
+                    disabled={savingGear}
+                    className="min-h-[44px] w-full rounded-[var(--radius-md)] border border-border-strong bg-bg-recess px-3 font-sans text-xs text-text-primary placeholder:text-text-dim disabled:opacity-50"
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <button
+                  type="submit"
+                  data-testid="ai-gear-save-btn"
+                  disabled={savingGear}
+                  className="min-h-[44px] rounded-[var(--radius-md)] border border-accent-border bg-bg-elevated px-4 font-sans text-xs font-semibold text-accent transition-colors duration-150 hover:border-accent disabled:opacity-50 lg:min-h-[38px] cursor-pointer"
+                >
+                  {savingGear ? 'Validando…' : 'Validar e salvar'}
+                </button>
+
+                {gearSavedNotice && !gearError ? (
+                  <span className="inline-flex items-center gap-1.5 font-mono text-[11px] font-semibold text-status-confirmed">
+                    <CheckCircle2 className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden="true" />
+                    Equipamento validado e salvo
+                  </span>
+                ) : null}
+              </div>
+
+              {gearError ? (
+                <div
+                  role="alert"
+                  data-testid="ai-gear-error"
+                  className="flex items-start gap-2 rounded-[var(--radius-md)] border border-status-error-border bg-status-error-bg px-3 py-2.5 text-xs text-text-primary"
+                >
+                  <AlertCircle
+                    className="mt-0.5 h-4 w-4 shrink-0 text-status-error"
+                    strokeWidth={1.75}
+                    aria-hidden="true"
+                  />
+                  <span className="font-sans leading-relaxed">{gearError}</span>
+                </div>
+              ) : null}
+            </form>
+
+            {aiGear ? (
+              <div
+                data-testid="ai-gear-summary"
+                className="flex flex-col gap-2 rounded-[var(--radius-md)] border border-border-subtle bg-bg-recess p-3"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-sans text-xs font-semibold text-text-primary">
+                    {aiGear.guitarModel}
+                    {aiGear.outputTarget ? ` · ${aiGear.outputTarget}` : ''}
+                  </span>
+                  <span className="rounded-[var(--radius-sm)] border border-status-confirmed-border bg-status-confirmed-bg px-2 py-0.5 font-mono text-[11px] font-semibold text-status-confirmed">
+                    Ativo
+                  </span>
+                </div>
+                <p className="font-sans text-xs text-text-muted">{aiGear.pickupSummary}</p>
+                {aiGear.recommendations.length > 0 ? (
+                  <ul className="flex flex-col gap-1 border-t border-border-subtle pt-2 font-sans text-xs text-text-muted">
+                    {aiGear.recommendations.map((rec, idx) => (
+                      <li key={idx} className="flex items-start gap-2">
+                        <span className="font-mono text-accent" aria-hidden="true">
+                          ·
+                        </span>
+                        <span>{rec}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+            ) : null}
+          </section>
 
           {/* Acesso Mobile via QR Code (Desktop) vs Sessão Ativa (Mobile) */}
           {isLocalDesktop ? (
