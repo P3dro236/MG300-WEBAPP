@@ -73,7 +73,7 @@ function buildMockExperimentalState(slot: number, presetName: string): Experimen
     bpm: 118,
     timeFlag: 0,
     ampParams: [62, 10, 58, 52, 60, 56],
-    blocksEnabled: [false, true, true, true, false, true, false, true, true, true, true],
+    blocksEnabled: [true, true, true, false, true, false, true, true],
     blockModels: { '1': 1, '2': 2, '3': 5, '5': 1, '7': 1, '8': 2, '9': 5, '10': 2 },
     blockParams: {
       '1': [55, 40, 0, 0, 0, 0],
@@ -419,7 +419,20 @@ describe('AI Tone Assistant UI (StageDisplay, SettingsModal, AiToneModal, App)',
       }
       if (url.endsWith('/api/presets/select')) {
         selectPresetCalls.push(body);
-        return new Response(JSON.stringify({}), { status: 200 });
+        return new Response(
+          JSON.stringify({
+            state: buildMockControllerState({
+              confirmedState: {
+                presetId: body.presetId ?? '2B',
+                slotIndex: body.slotIndex ?? 5,
+                volume: 60,
+                volumeTarget: 'master_cc64',
+                confirmedAt: '2026-11-27T01:02:00.000Z',
+              },
+            }),
+          }),
+          { status: 200 },
+        );
       }
       if (url.endsWith('/api/ai/gear') && method === 'GET') {
         return new Response(JSON.stringify({ gear: currentGear }), { status: 200 });
@@ -596,6 +609,159 @@ describe('AI Tone Assistant UI (StageDisplay, SettingsModal, AiToneModal, App)',
       expect(screen.getByTestId('experimental-edit-panel')).toBeInTheDocument();
     });
     expect(loadSlotCalls).toContainEqual({ slot: 5 });
+
+    // Close drawer and select slot 2B in PresetGrid to verify signalChain LEDs are NOT shifted
+    fireEvent.click(screen.getByTestId('close-tone-editor-btn'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('experimental-edit-panel')).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('preset-card-2B'));
+    await waitFor(() => {
+      expect(screen.getByTestId('stage-display')).toHaveTextContent('Scorpions 80s');
+    });
+    const strip = screen.getByTestId('signal-chain-strip');
+    expect(strip.querySelector('[data-block="COMP"]')?.getAttribute('data-active')).toBe('true');
+    expect(strip.querySelector('[data-block="EFX"]')?.getAttribute('data-active')).toBe('true');
+    expect(strip.querySelector('[data-block="AMP"]')?.getAttribute('data-active')).toBe('true');
+    expect(strip.querySelector('[data-block="EQ"]')?.getAttribute('data-active')).toBe('false');
+    expect(strip.querySelector('[data-block="NR"]')?.getAttribute('data-active')).toBe('true');
+    expect(strip.querySelector('[data-block="MOD"]')?.getAttribute('data-active')).toBe('false');
+    expect(strip.querySelector('[data-block="DLY"]')?.getAttribute('data-active')).toBe('true');
+    expect(strip.querySelector('[data-block="RVB"]')?.getAttribute('data-active')).toBe('true');
+    expect(strip.querySelector('[data-block="CAB"]')?.getAttribute('data-active')).toBe('true');
+  });
+
+  it('shows unverified warning in AiToneModal and avoids optimistic library update when saveResult.verified is false', async () => {
+    installFakeWebSocket();
+
+    const unverifiedResponse: AiToneApplyResponse = {
+      slotIndex: 5,
+      displayBank: '2B',
+      intent: 'edit_existing',
+      presetName: 'Unverified Tone',
+      bpm: 120,
+      timeFlag: 0,
+      summary: 'Tentativa de gravação sem confirmação de readback.',
+      tips: [],
+      appliedBlocks: [],
+      calibration: {
+        source: 'hardware_user',
+        sampleCount: 1,
+        avgPatchVolume: 60,
+        avgIrVolume: 20,
+        avgAmpLevel: 50,
+        appliedPatchVolume: 60,
+        appliedIrVolume: 20,
+        appliedAmpLevel: 50,
+      },
+      saveResult: {
+        targetSlot: 5,
+        displayBank: '2B',
+        ackReceived: false,
+        verified: false,
+        mismatchedOffsets: [10],
+        backupPath: 'backups/2B.json',
+        savedAt: '2026-11-27T01:00:00.000Z',
+      },
+      experimentalState: buildMockExperimentalState(5, 'Unverified Tone'),
+    };
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = (init?.method ?? 'GET').toUpperCase();
+        if (url.endsWith('/api/pairing/status')) {
+          return new Response(
+            JSON.stringify({
+              isLocalDesktop: true,
+              authenticated: true,
+              sessionStatus: 'desktop',
+              activeSession: null,
+              pendingRequests: [],
+              activeChallenge: null,
+              lanUrls: [],
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.endsWith('/api/status')) {
+          return new Response(
+            JSON.stringify(
+              buildMockControllerState({
+                confirmedState: {
+                  presetId: '2B',
+                  slotIndex: 5,
+                  volume: 60,
+                  volumeTarget: 'master_cc64',
+                  confirmedAt: '2026-11-27T00:00:00.000Z',
+                },
+              }),
+            ),
+            { status: 200 },
+          );
+        }
+        if (url.endsWith('/api/presets')) {
+          return new Response(
+            JSON.stringify({
+              presets: [USER_PRESET_1A, USER_PRESET_2B],
+              directory: null,
+              directoryStatus: 'ok',
+              warnings: [],
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.endsWith('/api/ai/gear') && method === 'GET') {
+          return new Response(
+            JSON.stringify({
+              gear: {
+                guitarModel: 'Fender Telecaster',
+                outputTarget: 'FRFR',
+                pickupSummary: 'SS',
+                recommendations: [],
+                updatedAt: '2026-11-27T00:00:00.000Z',
+              },
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.endsWith('/api/ai/tone/apply') && method === 'POST') {
+          return new Response(JSON.stringify(unverifiedResponse), { status: 200 });
+        }
+        return new Response(JSON.stringify({}), { status: 404 });
+      }),
+    );
+
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByTestId('stage-display')).toHaveTextContent('Gary Still Blues');
+    });
+
+    fireEvent.click(screen.getByTestId('open-ai-tone-btn'));
+    await screen.findByTestId('ai-tone-modal');
+
+    fireEvent.change(screen.getByTestId('ai-prompt-input'), {
+      target: { value: 'Mais brilho no clean' },
+    });
+    fireEvent.click(screen.getByTestId('ai-submit-btn'));
+    fireEvent.click(screen.getByTestId('ai-confirm-accept-btn'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('ai-applied-result')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('ai-save-unverified-warning')).toHaveTextContent(
+      '1 diferença(s) detectada(s)',
+    );
+    expect(screen.getByTestId('ai-applied-result')).toHaveTextContent('Verificação pendente');
+
+    fireEvent.click(screen.getByTestId('ai-close-result-btn'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('ai-tone-modal')).not.toBeInTheDocument();
+    });
+    expect(screen.getByTestId('stage-display')).toHaveTextContent('Gary Still Blues');
+    expect(screen.getByTestId('preset-card-2B')).toHaveTextContent('Gary Still Blues');
   });
 
   it('shows midi disconnected banner in AiToneModal and blocks AI submission without losing prompt/slot', async () => {

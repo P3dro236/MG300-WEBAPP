@@ -527,54 +527,70 @@ export function useControllerSession({
         }
       }
 
-      const coord = slotIndexToBankCoordinate(result.slotIndex);
-      const blocksEnabled = result.experimentalState?.blocksEnabled ?? [];
-      const updatedPreset: Preset = {
-        id: result.displayBank,
-        slotIndex: result.slotIndex,
-        bankType: 'user',
-        bankNumber: coord.bankNumber,
-        patchLetter: coord.patchLetter,
-        displayBank: result.displayBank,
-        name: result.presetName,
-        patchVolume: result.experimentalState?.patchVolume ?? result.calibration.appliedPatchVolume,
-        irVolume: result.experimentalState?.irVolume ?? result.calibration.appliedIrVolume,
-        origin: 'hardware',
-        signalChain: {
-          compEnabled: Boolean(blocksEnabled[1]),
-          efxEnabled: Boolean(blocksEnabled[2]),
-          ampEnabled: Boolean(blocksEnabled[3]),
-          eqEnabled: Boolean(blocksEnabled[4]),
-          nrEnabled: Boolean(blocksEnabled[5]),
-          modEnabled: Boolean(blocksEnabled[6]),
-          dlyEnabled: Boolean(blocksEnabled[7]),
-          rvbEnabled: Boolean(blocksEnabled[8]),
-          irEnabled: Boolean(blocksEnabled[9]),
-        },
-        isDuplicate: false,
-        updatedAt: result.saveResult.savedAt,
-        midiMapping: {
-          protocol: 'mg300-cc60',
-          channel: 0,
-          ccNumber: 60,
-          ccValue: result.slotIndex,
-        },
-      };
-
-      setAllSlotPresets((prev) => {
-        const next = prev.filter((p) => p.slotIndex !== updatedPreset.slotIndex);
-        next.push(updatedPreset);
-        return next.sort((a, b) => a.slotIndex - b.slotIndex);
-      });
-
-      setPresetsResponse((prev) => {
-        const merged = mergePresetsSafely(prev.presets, [updatedPreset]);
-        persistState(merged);
-        return {
-          ...prev,
-          presets: merged,
+      if (result.saveResult.verified) {
+        const coord = slotIndexToBankCoordinate(result.slotIndex);
+        const blockModels = result.experimentalState?.blockModels;
+        const blocksEnabled = result.experimentalState?.blocksEnabled ?? [];
+        const isBlockOn = (id: number): boolean => {
+          if (blockModels && Object.prototype.hasOwnProperty.call(blockModels, String(id))) {
+            return (blockModels[String(id)] ?? 0) > 0;
+          }
+          if (id >= 1 && id <= 8) {
+            return Boolean(blocksEnabled[id - 1]);
+          }
+          if (id === 9) {
+            return Boolean(result.experimentalState?.cabEnabled);
+          }
+          return false;
         };
-      });
+
+        const updatedPreset: Preset = {
+          id: result.displayBank,
+          slotIndex: result.slotIndex,
+          bankType: 'user',
+          bankNumber: coord.bankNumber,
+          patchLetter: coord.patchLetter,
+          displayBank: result.displayBank,
+          name: result.presetName,
+          patchVolume: result.experimentalState?.patchVolume ?? result.calibration.appliedPatchVolume,
+          irVolume: result.experimentalState?.irVolume ?? result.calibration.appliedIrVolume,
+          origin: 'hardware',
+          signalChain: {
+            compEnabled: isBlockOn(1),
+            efxEnabled: isBlockOn(2),
+            ampEnabled: isBlockOn(3),
+            eqEnabled: isBlockOn(4),
+            nrEnabled: isBlockOn(5),
+            modEnabled: isBlockOn(6),
+            dlyEnabled: isBlockOn(7),
+            rvbEnabled: isBlockOn(8),
+            irEnabled: isBlockOn(9),
+          },
+          isDuplicate: false,
+          updatedAt: result.saveResult.savedAt,
+          midiMapping: {
+            protocol: 'mg300-cc60',
+            channel: 0,
+            ccNumber: 60,
+            ccValue: result.slotIndex,
+          },
+        };
+
+        setAllSlotPresets((prev) => {
+          const next = prev.filter((p) => p.slotIndex !== updatedPreset.slotIndex);
+          next.push(updatedPreset);
+          return next.sort((a, b) => a.slotIndex - b.slotIndex);
+        });
+
+        setPresetsResponse((prev) => {
+          const merged = mergePresetsSafely(prev.presets, [updatedPreset]);
+          persistState(merged);
+          return {
+            ...prev,
+            presets: merged,
+          };
+        });
+      }
 
       return result;
     },
