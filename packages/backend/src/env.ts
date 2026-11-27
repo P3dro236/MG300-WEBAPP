@@ -53,7 +53,7 @@ export function parseEnvContent(content: string): Record<string, string> {
 
 /**
  * Loads `.env` from `process.cwd()` and `<monorepoRoot>` without external dependencies,
- * setting `process.env[k]` only when still `undefined`.
+ * setting `process.env[k]` only when still `undefined` or blank (empty/whitespace).
  */
 export function loadEnvFiles(candidatePaths?: readonly string[]): string[] {
   const defaultPaths = [
@@ -77,7 +77,8 @@ export function loadEnvFiles(candidatePaths?: readonly string[]): string[] {
       const content = fs.readFileSync(envPath, 'utf8');
       const entries = parseEnvContent(content);
       for (const [key, value] of Object.entries(entries)) {
-        if (process.env[key] === undefined) {
+        const current = process.env[key];
+        if (current === undefined || current.trim() === '') {
           process.env[key] = value;
         }
       }
