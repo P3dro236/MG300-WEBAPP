@@ -49,8 +49,8 @@ export interface AiTonePlan {
   irVolume?: number;
   patchVolume?: number;
   blocks?: Partial<Record<Mg300BlockCode, AiBlockDirective>>;
-  summary: string;
-  tips: string[];
+  summary?: string;
+  tips?: string[];
 }
 
 export interface CalibratedToneResult {
@@ -66,6 +66,42 @@ export interface CalibratedToneResult {
 const DEFAULT_AMP_LEVEL = 65;
 const DEFAULT_IR_VOLUME = 20;
 const DEFAULT_PATCH_VOLUME = 50;
+const DLY_PARAM_OFFSET = 0x36;
+const RVB_PARAM_OFFSET = 0x3d;
+
+const HEAVY_AMBIENCE_PATTERNS: readonly RegExp[] = [
+  /\bambient\b/,
+  /\bshoegaze\b/,
+  /\bpost[- ]?rock\b/,
+  /\bdream[- ]?pop\b/,
+  /\bcathedral\b/,
+  /\bcatedral\b/,
+  /\bwash\b/,
+  /\bshimmer\b/,
+  /\bespacial\b/,
+  /\bspatial\b/,
+  /\bthe\s+edge\b/,
+  /\b(?:delay|eco)\s+(?:longo|carregado|pesado|forte|alto|intenso|profundo|infinito)\b/,
+  /\b(?:muito|mais|bastante|aumentar|aumenta|subir|sobe|dobrar|dobra)\s+(?:o\s+)?(?:delay|eco)\b/,
+  /\breverb\s+(?:longo|carregado|pesado|forte|alto|intenso|profundo|enorme|gigante|grande)\b/,
+  /\b(?:muito|mais|bastante|aumentar|aumenta|subir|sobe|dobrar|dobra)\s+(?:o\s+)?reverb\b/,
+  /\b(?:more|long|heavy|high)\s+(?:delay|reverb)\b/,
+];
+
+/**
+ * Detects whether the musician explicitly requested ambient/heavy delay/reverb or asked to
+ * raise delay/reverb, so deterministic ambience clamping does not fight intentional wet tones.
+ */
+export function isAmbientOrHeavyAmbienceRequest(prompt?: string): boolean {
+  if (!prompt || !prompt.trim()) {
+    return false;
+  }
+  const normalized = prompt
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+  return HEAVY_AMBIENCE_PATTERNS.some((pattern) => pattern.test(normalized));
+}
 
 function clampInt(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) {
@@ -279,13 +315,16 @@ export function resolveCalibrationBaseline(options: {
 function resolveParamValueByInput(
   paramLabel: string,
   paramIndex: number,
+  declaredPosition: number,
+  usePackedArrayOrder: boolean,
   rawParams: Record<string, number> | number[] | undefined,
 ): number | undefined {
   if (!rawParams) {
     return undefined;
   }
   if (Array.isArray(rawParams)) {
-    const val = rawParams[paramIndex];
+    const idx = usePackedArrayOrder ? declaredPosition : paramIndex;
+    const val = rawParams[idx];
     return typeof val === 'number' && Number.isFinite(val) ? val : undefined;
   }
 
@@ -349,10 +388,21 @@ function applyParamBlockDirective(
     }
   }
 
-  for (const paramSpec of spec.params) {
+  // Models with a paramIndex gap (e.g. AMP 2/26 skipping p1, AMP 8/9/23 skipping p4) may receive
+  // either a full 6-slot array indexed by paramIndex or a packed array matching spec.params order.
+  const hasParamIndexGap = spec.params.some((p, idx) => p.paramIndex !== idx);
+  const usePackedArrayOrder =
+    Array.isArray(directive.params) &&
+    hasParamIndexGap &&
+    directive.params.length <= spec.params.length;
+
+  for (let declaredPosition = 0; declaredPosition < spec.params.length; declaredPosition++) {
+    const paramSpec = spec.params[declaredPosition]!;
     const provided = resolveParamValueByInput(
       paramSpec.label,
       paramSpec.paramIndex,
+      declaredPosition,
+      usePackedArrayOrder,
       directive.params,
     );
     const candidate = provided !== undefined ? provided : (baseParams[paramSpec.paramIndex] ?? 0);
@@ -477,6 +527,112 @@ function applyEditExistingCalibration(
   }
 }
 
+function isHighGainTone(out: Uint8Array): boolean {
+  if ((out[0x03] ?? 0) > 0 && (out[0x1a] ?? 0) >= 55) {
+    return true;
+  }
+  const efxModel = out[0x02] ?? 0;
+  if (efxModel > 0 && efxModel !== 12) {
+    // EFX 1..3 (Dist+, RC Bst, AC Bst) store Distortion/Gain at p1 (0x14);
+    // EFX 4..11 (Dist Uno..Muf Dist) store Drive/Gain/Distortion/Sustain at p2 (0x15).
+    const efxDrive = efxModel <= 3 ? (out[0x14] ?? 0) : (out[0x15] ?? 0);
+    if (efxDrive >= 50) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function getSpecParamOffset(
+  blockId: number,
+  modelId: number,
+  paramLabel: string,
+  baseOffset: number,
+): number | null {
+  const spec = getMg300ModelSpec(blockId, modelId);
+  const param = spec?.params.find((p) => p.label === paramLabel);
+  return param ? baseOffset + param.paramIndex : null;
+}
+
+/**
+ * Calibrates DLY and RVB deterministically for the MG-300's series `AMP -> DLY -> RVB` DSP chain
+ * so rock/blues/solo tones stay clear and non-resonant while honoring explicit ambient requests.
+ */
+function applyAmbienceCalibration(
+  out: Uint8Array,
+  plan: AiTonePlan,
+  intent: AiToneIntent,
+  userPrompt?: string,
+): void {
+  const shouldCalibrateDly = intent === 'create_new' || plan.blocks?.DLY !== undefined;
+  const shouldCalibrateRvb = intent === 'create_new' || plan.blocks?.RVB !== undefined;
+  const dlyModel = out[0x07] ?? 0;
+  const rvbModel = out[0x08] ?? 0;
+  const isAmbient = isAmbientOrHeavyAmbienceRequest(userPrompt);
+
+  if (isAmbient) {
+    const ceiling = intent === 'create_new' ? 75 : 65;
+    if (shouldCalibrateDly && dlyModel >= 1 && dlyModel <= 6) {
+      out[DLY_PARAM_OFFSET + 1] = clampInt(out[DLY_PARAM_OFFSET + 1] ?? 0, 0, ceiling);
+      out[DLY_PARAM_OFFSET + 2] = clampInt(out[DLY_PARAM_OFFSET + 2] ?? 0, 0, ceiling);
+    }
+    if (shouldCalibrateRvb && rvbModel > 0) {
+      const mixOffset = getSpecParamOffset(8, rvbModel, 'Mix', RVB_PARAM_OFFSET);
+      if (mixOffset !== null) {
+        out[mixOffset] = clampInt(out[mixOffset] ?? 0, 0, ceiling);
+      }
+      if (intent === 'edit_existing') {
+        const decayOffset = getSpecParamOffset(8, rvbModel, 'Decay', RVB_PARAM_OFFSET);
+        if (decayOffset !== null) {
+          out[decayOffset] = clampInt(out[decayOffset] ?? 0, 0, ceiling);
+        }
+      }
+    }
+    return;
+  }
+
+  const highGain = isHighGainTone(out);
+
+  if (shouldCalibrateDly && dlyModel > 0) {
+    if (dlyModel === 1) {
+      // Analog Delay reverses p1/p2 relative to other delays: p1=Echo (level), p2=Intensity (feedback).
+      out[DLY_PARAM_OFFSET + 1] = clampInt(out[DLY_PARAM_OFFSET + 1] ?? 20, 12, highGain ? 24 : 28);
+      out[DLY_PARAM_OFFSET + 2] = clampInt(out[DLY_PARAM_OFFSET + 2] ?? 16, 10, highGain ? 20 : 24);
+    } else if (dlyModel >= 2 && dlyModel <= 6) {
+      // Digi Delay, Modulate, Tape Echo, Reverse, Pan: p1=F.Back, p2=Level/Mix.
+      out[DLY_PARAM_OFFSET + 1] = clampInt(out[DLY_PARAM_OFFSET + 1] ?? 18, 12, highGain ? 22 : 26);
+      out[DLY_PARAM_OFFSET + 2] = clampInt(out[DLY_PARAM_OFFSET + 2] ?? 20, 12, highGain ? 24 : 28);
+      if (dlyModel === 3) {
+        out[DLY_PARAM_OFFSET + 3] = clampInt(out[DLY_PARAM_OFFSET + 3] ?? 15, 0, 30);
+      }
+    }
+  }
+
+  if (shouldCalibrateRvb && rvbModel > 0) {
+    const mixOffset = getSpecParamOffset(8, rvbModel, 'Mix', RVB_PARAM_OFFSET);
+    if (mixOffset !== null) {
+      out[mixOffset] = clampInt(out[mixOffset] ?? 18, 10, highGain ? 22 : 26);
+    }
+
+    const decayOffset = getSpecParamOffset(8, rvbModel, 'Decay', RVB_PARAM_OFFSET);
+    if (decayOffset !== null) {
+      const maxDecay = highGain && (rvbModel === 2 || rvbModel === 3) ? 42 : 48;
+      out[decayOffset] = clampInt(out[decayOffset] ?? 32, 20, maxDecay);
+    }
+
+    if (rvbModel === 2) {
+      const preDelayOffset = getSpecParamOffset(8, rvbModel, 'Pre.D', RVB_PARAM_OFFSET);
+      if (preDelayOffset !== null) {
+        out[preDelayOffset] = clampInt(out[preDelayOffset] ?? 25, 20, 60);
+      }
+      const livelinessOffset = getSpecParamOffset(8, rvbModel, 'Liveliness', RVB_PARAM_OFFSET);
+      if (livelinessOffset !== null) {
+        out[livelinessOffset] = clampInt(out[livelinessOffset] ?? 30, 15, 45);
+      }
+    }
+  }
+}
+
 function buildAppliedBlocksSummary(
   finalStruct: Uint8Array,
   existingStruct: Uint8Array,
@@ -530,8 +686,9 @@ export function buildAndCalibrateStruct102(options: {
   plan: AiTonePlan;
   existingStruct: Uint8Array;
   baseline: CalibrationBaseline;
+  userPrompt?: string;
 }): CalibratedToneResult {
-  const { plan, existingStruct, baseline } = options;
+  const { plan, existingStruct, baseline, userPrompt } = options;
   const intent: AiToneIntent = plan.intent === 'edit_existing' ? 'edit_existing' : 'create_new';
 
   const safeName = sanitizeMg300PresetName(
@@ -601,6 +758,8 @@ export function buildAndCalibrateStruct102(options: {
   } else {
     applyEditExistingCalibration(out, existingStruct, baseline);
   }
+
+  applyAmbienceCalibration(out, plan, intent, userPrompt);
 
   const finalStruct = sanitizeStruct102ForSysEx(out);
   const appliedBlocks = buildAppliedBlocksSummary(finalStruct, existingStruct, intent);
