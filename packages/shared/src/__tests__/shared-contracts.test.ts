@@ -623,4 +623,102 @@ describe('@quicktone/shared — MG-300 Protocol & Contracts', () => {
     });
     expect(applyResp.displayBank).toBe('4D');
   });
+
+  it('ignores inactive/bypassed and undeclared param slots in compareStruct102Readback when enabled while keeping active fields strict', () => {
+    const expected = createBlankMg300Struct102({
+      name: 'Solo Readback',
+      bpm: 124,
+      timeFlag: 1,
+      patchVolume: 56,
+      irVolume: 20,
+      irCut: 1,
+    });
+    // COMP=1 (p0..p1 declared, p2..p5 undeclared), AMP=2 (p1 undeclared), MOD=0 (bypass), DLY=4 (p0..p2 declared, p3..p5 undeclared)
+    expected[0x01] = 1;
+    expected.set([55, 45, 0, 0, 0, 0], 0x0c);
+    expected[0x03] = 2;
+    expected.set([48, 0, 66, 52, 54, 60], 0x1a);
+    expected[0x06] = 0; // MOD bypassed
+    expected.set([50, 50, 50, 0, 0, 0], 0x2f);
+    expected[0x07] = 4; // Tape Echo
+    expected.set([42, 20, 22, 0, 0, 0], 0x36);
+
+    const readbackWithRomNoise = Uint8Array.from(expected);
+    readbackWithRomNoise[48] = 77; // 0x30 = MOD param 1 (block is bypassed)
+    readbackWithRomNoise[0x0e] = 9; // COMP undeclared slot p2
+    readbackWithRomNoise[0x1b] = 1; // AMP 2 Deluxe Rvb undeclared slot p1
+    readbackWithRomNoise[0x39] = 7; // DLY Tape Echo undeclared slot p3 (STM32 ROM metadata)
+    readbackWithRomNoise[0x3a] = 1; // DLY Tape Echo undeclared slot p4
+    readbackWithRomNoise[0x3b] = 2; // DLY Tape Echo undeclared slot p5
+    readbackWithRomNoise[0x59] = 12; // Unused User IR name byte while CAB !== 100
+
+    // Backwards compatibility: default strict mode still flags all differing offsets
+    expect(compareStruct102Readback(expected, readbackWithRomNoise)).toEqual([
+      0x0e, 0x1b, 48, 0x39, 0x3a, 0x3b, 0x59,
+    ]);
+    // With ignoreInactiveAndUndeclaredParams: true, all benign STM32 ROM bytes are ignored
+    expect(
+      compareStruct102Readback(expected, readbackWithRomNoise, {
+        ignoreInactiveAndUndeclaredParams: true,
+      }),
+    ).toEqual([]);
+
+    // Also verify AMP 4 Tweedy (p3..p5 undeclared) and AMP 8 Class A15 (p4 Middle undeclared)
+    const tweedyExp = createBlankMg300Struct102({ name: 'Tweedy Test' });
+    tweedyExp[0x03] = 4;
+    tweedyExp.set([55, 60, 68, 0, 0, 0], 0x1a);
+    const tweedyAct = Uint8Array.from(tweedyExp);
+    tweedyAct[0x1d] = 50;
+    tweedyAct[0x1e] = 50;
+    tweedyAct[0x1f] = 50;
+    expect(
+      compareStruct102Readback(tweedyExp, tweedyAct, { ignoreInactiveAndUndeclaredParams: true }),
+    ).toEqual([]);
+
+    const ac15Exp = createBlankMg300Struct102({ name: 'AC15 Test' });
+    ac15Exp[0x03] = 8;
+    ac15Exp.set([45, 30, 68, 52, 0, 64], 0x1a);
+    const ac15Act = Uint8Array.from(ac15Exp);
+    ac15Act[0x1e] = 50; // Middle is undeclared on Class A15
+    expect(
+      compareStruct102Readback(ac15Exp, ac15Act, { ignoreInactiveAndUndeclaredParams: true }),
+    ).toEqual([]);
+
+    // Active block/declared params/metadata divergences MUST still be detected
+    const realDrift = Uint8Array.from(readbackWithRomNoise);
+    realDrift[0x06] = 2; // Bypassed MOD model byte drifted from 0 -> 2
+    realDrift[0x37] = 31; // Declared DLY F.Back drifted
+    realDrift[0x43] = 2; // irCut drifted
+    realDrift[0x45] = 0x05; // Preset name char drifted
+    realDrift[0x57] = 0x04; // User IR marker byte drifted (always strict)
+    realDrift[MG300_FILE_FORMAT.IR_VOLUME_OFFSET] = 24;
+    realDrift[MG300_FILE_FORMAT.TIME_FLAG_OFFSET] = 0;
+    realDrift[MG300_FILE_FORMAT.BPM_ENCODED_OFFSET] = 130;
+    realDrift[MG300_FILE_FORMAT.PATCH_LEVEL_OFFSET] = 60;
+
+    expect(
+      compareStruct102Readback(expected, realDrift, { ignoreInactiveAndUndeclaredParams: true }),
+    ).toEqual([
+      0x06,
+      0x37,
+      0x43,
+      0x45,
+      0x57,
+      MG300_FILE_FORMAT.IR_VOLUME_OFFSET,
+      MG300_FILE_FORMAT.TIME_FLAG_OFFSET,
+      MG300_FILE_FORMAT.BPM_ENCODED_OFFSET,
+      MG300_FILE_FORMAT.PATCH_LEVEL_OFFSET,
+    ]);
+
+    // When CAB=100 (User IR), bytes 0x57..0x61 remain strictly compared
+    const userIrExp = createBlankMg300Struct102({ name: 'User IR Test' });
+    userIrExp[0x09] = MG300_USER_IR_CAB_ID;
+    userIrExp[0x57] = 3;
+    userIrExp.set([0, 1, 2], 0x58);
+    const userIrAct = Uint8Array.from(userIrExp);
+    userIrAct[0x59] = 9;
+    expect(
+      compareStruct102Readback(userIrExp, userIrAct, { ignoreInactiveAndUndeclaredParams: true }),
+    ).toEqual([0x59]);
+  });
 });

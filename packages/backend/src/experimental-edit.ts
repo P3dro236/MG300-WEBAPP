@@ -810,6 +810,7 @@ export class ExperimentalEditService {
       readBack = await this.readSlot(targetSlot);
       mismatchedOffsets = compareStruct102Readback(safeDraft, readBack, {
         ignoreBlockHeaderOffsets,
+        ignoreInactiveAndUndeclaredParams: true,
       });
     }
 

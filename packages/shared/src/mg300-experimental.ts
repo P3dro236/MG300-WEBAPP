@@ -13,6 +13,7 @@ import {
   MG300_PARAM_BLOCKS,
   MG300_USER_IR_CAB_ID,
   getMg300BlockByCc,
+  getMg300ModelSpec,
   isValidMg300BlockModel,
 } from './mg300-catalog.js';
 
@@ -322,18 +323,65 @@ export function sanitizeStruct102ForSysEx(raw: Uint8Array): Uint8Array {
   return out;
 }
 
+export interface CompareStruct102ReadbackOptions {
+  ignoreBlockHeaderOffsets?: boolean;
+  ignoreInactiveAndUndeclaredParams?: boolean;
+}
+
+function collectIgnoredReadbackParamOffsets(expected: Uint8Array): Set<number> {
+  const ignored = new Set<number>();
+  for (const block of MG300_PARAM_BLOCKS) {
+    if (block.structParamOffset === null) {
+      continue;
+    }
+    const expectedModel = expected[block.cc] ?? 0;
+    if (expectedModel === 0) {
+      for (let slot = 0; slot < block.paramSlotCount; slot++) {
+        ignored.add(block.structParamOffset + slot);
+      }
+      continue;
+    }
+    const spec = getMg300ModelSpec(block.id, expectedModel);
+    if (!spec) {
+      continue;
+    }
+    const declaredIndices = new Set(spec.params.map((p) => p.paramIndex));
+    for (let slot = 0; slot < block.paramSlotCount; slot++) {
+      if (!declaredIndices.has(slot)) {
+        ignored.add(block.structParamOffset + slot);
+      }
+    }
+  }
+
+  // User IR name bytes (+0x58..+0x61) are inactive unless CAB === 100; marker +0x57 is always checked.
+  if ((expected[0x09] ?? 0) !== MG300_USER_IR_CAB_ID) {
+    for (let offset = 0x58; offset <= 0x61; offset++) {
+      ignored.add(offset);
+    }
+  }
+
+  return ignored;
+}
+
 /**
  * Compares written `struct102` against `0x07 -> 0x06` hardware readback, respecting
- * STM32's 7-bit low-nibble rule (`>= 0x80`) and optional block ROM header reloads.
+ * STM32's 7-bit low-nibble rule (`>= 0x80`), optional block ROM header reloads,
+ * and optional filtering of bypassed/undeclared parameter slots.
  */
 export function compareStruct102Readback(
   expected: Uint8Array,
   actual: Uint8Array,
-  options: { ignoreBlockHeaderOffsets?: boolean } = {},
+  options: CompareStruct102ReadbackOptions = {},
 ): number[] {
+  const ignoredParamOffsets = options.ignoreInactiveAndUndeclaredParams
+    ? collectIgnoredReadbackParamOffsets(expected)
+    : null;
   const mismatches: number[] = [];
   for (let i = 0; i < MG300_FILE_FORMAT.PRESET_STRUCT_SIZE; i++) {
     if (options.ignoreBlockHeaderOffsets && MG300_BLOCK_HEADER_OFFSETS.has(i)) {
+      continue;
+    }
+    if (ignoredParamOffsets?.has(i)) {
       continue;
     }
     const exp = expected[i] ?? 0;
