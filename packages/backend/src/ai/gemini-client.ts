@@ -182,20 +182,6 @@ function isQuotaErrorSignal(status: number, bodyText: string): boolean {
   );
 }
 
-function isRetryableStatus(status: number): boolean {
-  return (
-    status === 400 ||
-    status === 401 ||
-    status === 403 ||
-    status === 404 ||
-    status === 429 ||
-    status === 500 ||
-    status === 502 ||
-    status === 503 ||
-    status === 504
-  );
-}
-
 function extractJsonText(rawText: string): string {
   const trimmed = rawText.trim();
   const fencedMatch = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed);
@@ -337,9 +323,8 @@ export class GeminiClient implements GeminiClientLike {
               `HTTP ${response.status} (${modelPath})`,
               apiKeys,
             );
-            if (isRetryableStatus(response.status)) {
-              continue;
-            }
+            // Any non-OK response (quota, deprecated/unsupported model, auth or transient 5xx)
+            // advances failover to the next candidate model and then to the backup API key.
             continue;
           }
 
