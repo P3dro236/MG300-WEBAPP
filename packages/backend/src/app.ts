@@ -25,7 +25,7 @@ import {
   WsClientMessageSchema,
   type WsServerMessage,
 } from '@quicktone/shared';
-import { MidiServiceError } from '@quicktone/midi';
+import { MidiServiceError, type MidiDiagnosticsLogger } from '@quicktone/midi';
 import { AiToneService } from './ai/ai-tone-service.js';
 import { AiGearStore } from './ai/gear-store.js';
 import {
@@ -138,6 +138,7 @@ export interface BackendAppOptions extends ControllerStateManagerOptions {
   geminiClient?: GeminiClientLike;
   aiGearPath?: string;
   aiCalibrationDir?: string | null;
+  aiDiagnosticsLogger?: MidiDiagnosticsLogger;
 }
 
 export type QuickToneBackendApp = FastifyInstance & {
@@ -1086,6 +1087,7 @@ export function createBackendApp(options: BackendAppOptions = {}): QuickToneBack
         stateManager,
         experimentalEdit: experimentalService,
         calibrationDir: options.aiCalibrationDir,
+        diagnosticsLogger: options.aiDiagnosticsLogger,
       })
     : null;
 

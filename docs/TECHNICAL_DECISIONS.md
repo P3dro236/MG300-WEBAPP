@@ -19,3 +19,7 @@
 ## ADR-005: Estabilidade de Inicialização MIDI/WS e Fader de Volume
 - **Contexto**: `<StrictMode>` causava reconexão WS imediata no boot, recompilações repetidas do bridge C# atrasavam a inicialização WinMM, e badges dinâmicos + ecos WebSocket em voo faziam o indicador de volume piscar.
 - **Decisão**: Adicionar cache de `bridge.dll` no `WinMmMidiAdapter`, mutex `connectInFlight` no `MidiService`, deduplicação de sockets no `QuickToneWsManager`, larguras fixas sem transições nos badges do `VolumeSlider` e guarda `isDraggingVolumeRef` contra retrocesso de volume durante arrasto.
+
+## ADR-006: Política Centralizada e Controle Conjunto de Delay e Ambiência na IA
+- **Contexto**: Backups reais da MG-300 (`Sultans Clean`, `Hotel Solo`, `Shine On Clean`) mostraram inclusão desnecessária de `DLY` pela IA, ausência de perfis por finalidade musical, falta de validação de `Time` e acúmulo de `MOD + DLY + RVB` em série pós-`AMP`.
+- **Decisão**: Separar a arquitetura em IA (`mp`/`dp`) → Política Centralizada (`ambience-policy.ts` com perfis `NONE`, `RHYTHM`, `LEAD`, `AMBIENT`, `SLAPBACK` e limites por modelo) → Compilador (`tone-calibrator.ts`) → Validador Determinístico (`ambience-validator.ts` com orçamento conjunto e regra de bloco único) → Serializador (`sanitizeStruct102ForSysEx`) + Observabilidade (`tone-observability.ts`). Detalhes completos em [AI_DELAY_AMBIENCE_POLICY.md](./AI_DELAY_AMBIENCE_POLICY.md).

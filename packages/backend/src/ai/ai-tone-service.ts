@@ -1,9 +1,14 @@
 import { z } from 'zod';
 import {
+  AiDelayProfileSchema,
+  AiMusicalPurposeSchema,
   MG300_BLOCK_CATALOG,
   MG300_FILE_FORMAT,
   MG300_USER_IR_CAB_ID,
+  type AiDelayProfile,
   type AiGearConfig,
+  type AiMusicalPurpose,
+  type AiToneAmbienceDiagnostics,
   type AiToneApplyRequest,
   type AiToneApplyResponse,
   type AiToneIntent,
@@ -15,6 +20,7 @@ import {
   isValidMg300UserSlot,
   slotIndexToBankCoordinate,
 } from '@quicktone/shared';
+import type { MidiDiagnosticsLogger } from '@quicktone/midi';
 import type { ExperimentalEditService } from '../experimental-edit.js';
 import type { ControllerStateManager } from '../state-manager.js';
 import type { AiGearStore } from './gear-store.js';
@@ -26,6 +32,7 @@ import {
   buildAndCalibrateStruct102,
   resolveCalibrationBaseline,
 } from './tone-calibrator.js';
+import { AiToneObservabilityRecorder } from './tone-observability.js';
 
 const BLOCK_KEY_TO_CODE: Readonly<Record<string, Mg300BlockCode>> = {
   '1': 'COMP',
@@ -124,6 +131,24 @@ export const TONE_RESPONSE_SCHEMA: Record<string, unknown> = {
   properties: {
     intent: { type: 'INTEGER' },
     name: { type: 'STRING' },
+    mp: {
+      type: 'STRING',
+      enum: [
+        'heavy_rhythm',
+        'rhythm',
+        'lead_solo',
+        'melodic_lead',
+        'slapback',
+        'ambient',
+        'clean_dry',
+        'clean_modulated',
+        'generic',
+      ],
+    },
+    dp: {
+      type: 'STRING',
+      enum: ['NONE', 'RHYTHM', 'LEAD', 'AMBIENT', 'SLAPBACK'],
+    },
     bpm: { type: 'INTEGER' },
     tf: { type: 'INTEGER' },
     pv: { type: 'INTEGER' },
@@ -167,6 +192,10 @@ const RawAiToneResponseSchema = z
     intent: z.union([z.literal(0), z.literal(1), z.enum(['create_new', 'edit_existing'])]),
     name: z.string().trim().min(1).nullish(),
     presetName: z.string().trim().min(1).nullish(),
+    mp: z.string().nullish(),
+    musicalPurpose: z.string().nullish(),
+    dp: z.string().nullish(),
+    delayProfile: z.string().nullish(),
     bpm: z.number().finite().nullish(),
     tf: z.number().finite().nullish(),
     timeFlag: z.number().finite().nullish(),
@@ -221,7 +250,7 @@ export const TONE_SYSTEM_INSTRUCTION = [
   '- EQ(4) 6-Band pós-amp (neutro=50): compense a guitarra do músico. Single-coil/Strat buscando corpo de Les Paul: 220Hz/500Hz em 56..62 e 2.6kHz/6.4kHz em 40..46. Humbucker buscando estalo de Strat: 100Hz/220Hz em 42..46 e 1.2kHz/2.6kHz em 55..60.',
   '- NR(5): em drive/fuzz/single-coil use Sens 25..38 e Decay 40..55 para limpar ruído sem cortar sustain de bends.',
   '- MOD(6): deixe m=0 quando a referência original for seca (ex.: Sweet Child O\' Mine, Still Got the Blues, Back in Black).',
-  '- DLY(7)->RVB(8) EM SÉRIE (alta sensibilidade no DSP): todo drive do AMP entra no DLY e cada repetição entra no RVB. ATENÇÃO: 1=Analog Delay tem p=[Time, Echo(nível), Intensity(feedback)] (invertido!). Modelos 2..6 têm p=[Time, F.Back, Level/Mix, ...]. Em solos rock/blues (Sweet Child O\' Mine, Back in Black, Still Got the Blues) use DLY discreto (F.Back/Intensity 12..22, Level/Echo 14..24) e RVB 1=Room (base/rock direto) ou 3=Plate (solos clássicos) com Mix 14..22 e Decay 25..42 (em 2=Hall mantenha Pre.D>=20 e Liveliness<=45). Só use DLY/RVB altos se o músico pedir explicitamente ambient, shoegaze, delay longo ou muito reverb.',
+  '- DLY(7)->RVB(8) EM SÉRIE (POLÍTICA DE PERFIS E AMBIÊNCIA CONJUNTA): todo drive do AMP entra no DLY e cada repetição entra no RVB. DLY(7) NÃO É OBRIGATÓRIO: em riffs pesados (Metallica base), rhythm seco, clean seco, clean com chorus+reverb e pedidos genéricos sem menção a delay, use dp="NONE" ou dp="RHYTHM" com "7":{"m":0} (omitido/desligado). Apenas 1 bloco de delay existe na MG-300. Perfis válidos para dp: NONE (sem delay), RHYTHM (definição e ataque, normalmente m=0), LEAD (repetição clara que não compete com a nota), SLAPBACK (tf=0, Time 8..24, F.Back/Intensity 0..12, sem Modulate/Pan), AMBIENT (somente quando pedido explicitamente ambient/shoegaze/atmosférico/delay longo). ATENÇÃO: 1=Analog Delay tem p=[Time, Echo(nível), Intensity(feedback)] (invertido!). Modelos 2..6 têm p=[Time, F.Back, Level/Mix, ...]. Controle conjunto: se MOD+DLY+RVB estiverem juntos, reduza Mix/Decay do RVB para manter definição.',
   '- CAB(9)+MIC(10)+ic: pareie gabinete ao amp (1=Jazz 212, 5=Twin 212, 6=Custom 412 p/ Hiwire, 8/9=Blue 112/212 p/ Vox, 10=Green 412 p/ Plexi/JTM45, 12=T75 412 ou 13=V30 412 p/ Brit 800/Friedman/SLO/Dual Rect, 26=T814 p/ Stageman, 28=TRC 410 p/ MLD). MIC: 1=E906 (equilibrado/quente), 2=SM57 (ataque/médios cortantes), 3=U87 (cheio/aveludado), 4=C414 (brilho/ar). Se outputTarget for caixa ativa/FRFR/PA/linha/fone, mantenha AMP, CAB e MIC ativos e use ic=2 (Hi/Lo Cut).',
   'EXCEÇÕES CRÍTICAS DE HARDWARE:',
   '1) Nunca invente IDs fora do catálogo. EFX 12 (Pitch Bender): p=[Pitch(0..100), Range(0..1)].',
@@ -231,8 +260,8 @@ export const TONE_SYSTEM_INSTRUCTION = [
   '5) MOD 13 (Harmony): [MinorScale(0..1), Key(0..11), Harmo(0..9), Balance(0..100)].',
   '6) Se AMP m=0, CAB deve ter m=0. Nunca use CAB m=100 em intent=0 (create_new). Em intent=1 (edit_existing), se current.hasUserIr=true e o pedido não pedir troca de gabinete, omita o bloco "9" para preservar o User IR.',
   '7) ESCOLHA DE INTENT: use intent=0 (create_new) para criar um timbre novo do zero (nota: o template base liga NR(5) por padrão; envie "5":{"m":0} se quiser Noise Gate desligado). Use intent=1 (edit_existing) quando o músico pedir ajuste incremental sobre o preset atual ("current"), incluindo em "b" APENAS os blocos que mudam e omitindo blocos inalterados.',
-  '8) METADADOS E FAIXAS EXATAS: bpm (40..240, omita se inalterado), tf (timeFlag: 0=ms, 1=BPM sync), pv (patchVolume: 0..100), iv (irVolume: 0..40, padrão ~20), ic (irCut: 0=off, 1=LoCut, 2=Hi/LoCut).',
-  'SAÍDA ESTRITAMENTE NUMÉRICA (JSON): retorne apenas {intent:0|1, name:"<=18 ASCII", bpm?, tf?, pv?, iv?, ic?, b:{"1".."10":{m,p?}}}. ZERO texto livre, ZERO summary, ZERO tips.',
+  '8) METADADOS E CLASSIFICAÇÃO: mp (finalidade: heavy_rhythm|rhythm|lead_solo|melodic_lead|slapback|ambient|clean_dry|clean_modulated|generic), dp (perfil delay: NONE|RHYTHM|LEAD|AMBIENT|SLAPBACK), bpm (40..240, omita se inalterado), tf (timeFlag: 0=ms, 1=BPM sync), pv (patchVolume: 0..100), iv (irVolume: 0..40, padrão ~20), ic (irCut: 0=off, 1=LoCut, 2=Hi/LoCut).',
+  'SAÍDA ESTRITAMENTE NUMÉRICA (JSON): retorne apenas {intent:0|1, name:"<=18 ASCII", mp?, dp?, bpm?, tf?, pv?, iv?, ic?, b:{"1".."10":{m,p?}}}. ZERO texto livre, ZERO summary, ZERO tips.',
 ].join('\n');
 
 function decodeCurrentPresetContext(struct102: Uint8Array): Record<string, unknown> {
@@ -273,26 +302,51 @@ function normalizeIntent(rawIntent: 0 | 1 | 'create_new' | 'edit_existing'): AiT
   return 'create_new';
 }
 
+function parseOptionalDelayProfile(raw: string | null | undefined): AiDelayProfile | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = AiDelayProfileSchema.safeParse(raw.trim().toUpperCase());
+  return parsed.success ? parsed.data : undefined;
+}
+
+function parseOptionalMusicalPurpose(raw: string | null | undefined): AiMusicalPurpose | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = AiMusicalPurposeSchema.safeParse(raw.trim().toLowerCase());
+  return parsed.success ? parsed.data : undefined;
+}
+
 function toNormalizedPlan(parsed: z.infer<typeof RawAiToneResponseSchema>): AiTonePlan {
   const rawBlocks = parsed.b ?? parsed.blocks ?? {};
   const blocks: Partial<Record<Mg300BlockCode, AiBlockDirective>> = {};
+  let activeDelayDirectiveCount = 0;
 
   for (const [rawKey, rawDir] of Object.entries(rawBlocks)) {
-    const code = BLOCK_KEY_TO_CODE[rawKey.trim().toUpperCase()];
-    if (!code) {
+    const normalizedKey = rawKey.trim().toUpperCase();
+    const mappedCode = BLOCK_KEY_TO_CODE[normalizedKey];
+    const isExtraDelayAlias = !mappedCode && /^(?:DLY|DELAY)[_\s-]?\d+$/.test(normalizedKey);
+    const modelId = 'm' in rawDir ? rawDir.m : rawDir.modelId;
+    const params = 'm' in rawDir ? rawDir.p : rawDir.params;
+
+    if (mappedCode === 'DLY' || isExtraDelayAlias) {
+      if (modelId > 0) {
+        activeDelayDirectiveCount += 1;
+      }
+      if (!mappedCode || blocks.DLY !== undefined) {
+        continue;
+      }
+    }
+
+    if (!mappedCode) {
       continue;
     }
-    if ('m' in rawDir) {
-      blocks[code] = {
-        modelId: rawDir.m,
-        ...(rawDir.p != null ? { params: rawDir.p } : {}),
-      };
-    } else {
-      blocks[code] = {
-        modelId: rawDir.modelId,
-        ...(rawDir.params != null ? { params: rawDir.params } : {}),
-      };
-    }
+
+    blocks[mappedCode] = {
+      modelId,
+      ...(params != null ? { params } : {}),
+    };
   }
 
   const rawBpm = parsed.bpm;
@@ -305,10 +359,16 @@ function toNormalizedPlan(parsed: z.infer<typeof RawAiToneResponseSchema>): AiTo
   const irVolume = rawIrVolume != null ? Math.round(rawIrVolume) : undefined;
   const rawPatchVolume = parsed.pv ?? parsed.patchVolume;
   const patchVolume = rawPatchVolume != null ? Math.round(rawPatchVolume) : undefined;
+  const delayProfile = parseOptionalDelayProfile(parsed.dp ?? parsed.delayProfile);
+  const musicalPurpose = parseOptionalMusicalPurpose(parsed.mp ?? parsed.musicalPurpose);
+  const duplicateDelayDirectives = Math.max(0, activeDelayDirectiveCount - 1);
 
   return {
     intent: normalizeIntent(parsed.intent),
     presetName: (parsed.name ?? parsed.presetName ?? 'AI Tone').trim(),
+    ...(musicalPurpose !== undefined ? { musicalPurpose } : {}),
+    ...(delayProfile !== undefined ? { delayProfile } : {}),
+    ...(duplicateDelayDirectives > 0 ? { duplicateDelayDirectives } : {}),
     ...(bpm !== undefined ? { bpm } : {}),
     ...(timeFlag !== undefined ? { timeFlag } : {}),
     ...(irCut !== undefined ? { irCut } : {}),
@@ -443,6 +503,7 @@ export interface AiToneServiceOptions {
   stateManager: ControllerStateManager;
   experimentalEdit: ExperimentalEditService;
   calibrationDir?: string | null;
+  diagnosticsLogger?: MidiDiagnosticsLogger;
 }
 
 export class AiToneService {
@@ -451,6 +512,7 @@ export class AiToneService {
   private readonly stateManager: ControllerStateManager;
   private readonly experimentalEdit: ExperimentalEditService;
   private readonly calibrationDir: string | null | undefined;
+  private readonly observability: AiToneObservabilityRecorder;
 
   public constructor(options: AiToneServiceOptions) {
     this.geminiClient = options.geminiClient;
@@ -458,6 +520,13 @@ export class AiToneService {
     this.stateManager = options.stateManager;
     this.experimentalEdit = options.experimentalEdit;
     this.calibrationDir = options.calibrationDir;
+    this.observability = new AiToneObservabilityRecorder({
+      logger: options.diagnosticsLogger,
+    });
+  }
+
+  public getRecentDiagnostics(): AiToneAmbienceDiagnostics[] {
+    return this.observability.getRecent();
   }
 
   public async applyTone(request: AiToneApplyRequest): Promise<AiToneApplyResponse> {
@@ -565,6 +634,7 @@ export class AiToneService {
     }
 
     const finalCalibrated: CalibratedToneResult = calibrated;
+    const recordedDiagnostics = this.observability.record(finalCalibrated.diagnostics);
 
     return {
       slotIndex: request.slotIndex,
@@ -579,6 +649,7 @@ export class AiToneService {
       calibration: finalCalibrated.calibration,
       saveResult,
       experimentalState,
+      diagnostics: recordedDiagnostics,
     };
   }
 }

@@ -412,6 +412,102 @@ export const AiToneApplyRequestSchema = z.object({
 });
 export type AiToneApplyRequest = z.infer<typeof AiToneApplyRequestSchema>;
 
+export const AiDelayProfileSchema = z.enum([
+  'NONE',
+  'RHYTHM',
+  'LEAD',
+  'AMBIENT',
+  'SLAPBACK',
+]);
+export type AiDelayProfile = z.infer<typeof AiDelayProfileSchema>;
+
+export const AiMusicalPurposeSchema = z.enum([
+  'heavy_rhythm',
+  'rhythm',
+  'lead_solo',
+  'melodic_lead',
+  'slapback',
+  'ambient',
+  'clean_dry',
+  'clean_modulated',
+  'generic',
+]);
+export type AiMusicalPurpose = z.infer<typeof AiMusicalPurposeSchema>;
+
+export const AiGainStageSchema = z.enum(['clean', 'crunch', 'high_gain']);
+export type AiGainStage = z.infer<typeof AiGainStageSchema>;
+
+export const AiAmbienceRuleCodeSchema = z.enum([
+  'unjustified_delay_removed',
+  'multiple_delay_blocks',
+  'incompatible_delay_model',
+  'incompatible_delay_time',
+  'excessive_delay_mix',
+  'excessive_delay_feedback',
+  'excessive_repeats',
+  'excessive_delay_modulation',
+  'excessive_reverb_mix',
+  'excessive_reverb_decay',
+  'excessive_reverb_liveliness',
+  'insufficient_reverb_predelay',
+  'excessive_combined_ambience',
+]);
+export type AiAmbienceRuleCode = z.infer<typeof AiAmbienceRuleCodeSchema>;
+
+export const AiAmbienceCorrectionSchema = z.object({
+  block: z.enum(['DLY', 'RVB', 'MOD', 'META']),
+  param: z.string(),
+  proposed: z.union([z.number(), z.string()]),
+  applied: z.union([z.number(), z.string()]),
+  rule: AiAmbienceRuleCodeSchema,
+  reason: z.string(),
+});
+export type AiAmbienceCorrection = z.infer<typeof AiAmbienceCorrectionSchema>;
+
+export const AiAmbienceBlockSnapshotSchema = z.object({
+  modelId: z.number().int().min(0).max(127),
+  modelName: z.string(),
+  params: z.array(
+    z.object({
+      label: z.string(),
+      value: z.number(),
+    }),
+  ),
+});
+export type AiAmbienceBlockSnapshot = z.infer<typeof AiAmbienceBlockSnapshotSchema>;
+
+export const AiToneAmbienceDiagnosticsSchema = z.object({
+  originalPrompt: z.string(),
+  musicalPurpose: AiMusicalPurposeSchema,
+  delayProfile: AiDelayProfileSchema,
+  aiSuggestedProfile: AiDelayProfileSchema.nullable(),
+  delayDecision: z.enum(['included', 'excluded', 'preserved']),
+  delayDecisionReason: z.string(),
+  selectedDelayModel: z.object({
+    id: z.number().int().min(0).max(127),
+    name: z.string(),
+  }),
+  aiProposedAmbience: z.object({
+    dly: AiAmbienceBlockSnapshotSchema.nullable(),
+    rvb: AiAmbienceBlockSnapshotSchema.nullable(),
+    modEnabled: z.boolean(),
+    gainStage: AiGainStageSchema,
+    timeFlag: z.number().int().min(0).max(1).optional(),
+    duplicateDelayDirectives: z.number().int().nonnegative(),
+  }),
+  finalAmbience: z.object({
+    dly: AiAmbienceBlockSnapshotSchema,
+    rvb: AiAmbienceBlockSnapshotSchema,
+    modEnabled: z.boolean(),
+    gainStage: AiGainStageSchema,
+    timeFlag: z.number().int().min(0).max(1),
+    jointAmbienceScore: z.number().nonnegative(),
+  }),
+  corrections: z.array(AiAmbienceCorrectionSchema),
+  warnings: z.array(z.string()),
+});
+export type AiToneAmbienceDiagnostics = z.infer<typeof AiToneAmbienceDiagnosticsSchema>;
+
 export const AiToneApplyResponseSchema = z.object({
   slotIndex: z.number().int().min(0).max(35),
   displayBank: z.string(),
@@ -425,6 +521,7 @@ export const AiToneApplyResponseSchema = z.object({
   calibration: AiOutputCalibrationSummarySchema,
   saveResult: ExperimentalSaveResultSchema,
   experimentalState: ExperimentalEditStateSchema,
+  diagnostics: AiToneAmbienceDiagnosticsSchema.optional(),
 });
 export type AiToneApplyResponse = z.infer<typeof AiToneApplyResponseSchema>;
 

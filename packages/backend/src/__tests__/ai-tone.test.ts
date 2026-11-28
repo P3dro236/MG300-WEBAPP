@@ -1282,17 +1282,17 @@ describe('AI Tone Assistant — Backend Phase 2A', () => {
     expect(Array.from(partialAmp2.struct102.subarray(0x3d, 0x41))).toEqual([50, 74, 25, 40]); // RVB untouched
 
     // 2. RVB Room (id=1: p0=Mix, p1=Tone, p2=Decay) preserves Tone (0x3e) & clamps Decay (0x3f);
-    //    DLY Modulate (id=3) clamps Mod (0x39 <= 30)
+    //    DLY Modulate (id=3) clamps Mod (0x39 <= 30) on lead/solo requests
     const roomAndModulate = buildAndCalibrateStruct102({
       existingStruct: buildMg300Struct102({ name: 'Blank' }),
       baseline,
-      userPrompt: 'Base rock direto estilo AC/DC',
+      userPrompt: 'Solo rock direto estilo AC/DC',
       plan: {
         intent: 'create_new',
         presetName: 'Rock Direct',
         blocks: {
           AMP: { modelId: 10, params: [62, 55, 65, 52, 64, 58] },
-          DLY: { modelId: 3, params: [42, 45, 40, 75] }, // Modulate: Mod=75 -> <= 30
+          DLY: { modelId: 3, params: [42, 45, 40, 75] }, // Modulate: Mod=75 -> <= 25
           RVB: { modelId: 1, params: [50, 68, 70] }, // Room: Mix=50, Tone=68, Decay=70
         },
       },
