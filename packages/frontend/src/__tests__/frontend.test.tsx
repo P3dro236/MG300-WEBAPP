@@ -2065,4 +2065,31 @@ describe('@quicktone/frontend — Testes Unitários da Interface', () => {
       expect(screen.getByTestId('offline-draft-notice')).toBeInTheDocument();
     });
   });
+
+  it('19. SettingsModal exibe lanUrls atualizados via WebSocket state_sync em vez dos valores antigos do mount', async () => {
+    currentState = buildMockState({ lanUrls: ['http://192.168.1.50:3001'] });
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('preset-card-1A')).toBeInTheDocument();
+    });
+
+    act(() => {
+      const ws = MockWebSocket.instances[0];
+      ws?.triggerOpen();
+      ws?.triggerMessage({
+        type: 'state_sync',
+        state: buildMockState({ lanUrls: ['http://192.168.1.99:3001'] }),
+        timestamp: new Date().toISOString(),
+      });
+    });
+
+    fireEvent.click(screen.getByTestId('open-settings-btn'));
+    await waitFor(() => {
+      expect(screen.getByTestId('settings-modal')).toBeInTheDocument();
+    });
+
+    const lanItems = screen.getAllByTestId('lan-url-item');
+    expect(lanItems.map((el) => el.textContent)).toEqual(['http://192.168.1.99:3001']);
+  });
 });

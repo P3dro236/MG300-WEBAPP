@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { _electron as electron, type ElectronApplication, expect, test } from '@playwright/test';
+import { chromium, _electron as electron, type ElectronApplication, expect, test } from '@playwright/test';
 import { buildNuxPresetBinary } from '../packages/quicktone-reader/src/index.js';
 
 const require = createRequire(import.meta.url);
@@ -123,6 +123,7 @@ function buildIsolatedElectronEnv(userDataDir: string, port: number): Record<str
     MG_DATA_DIR: userDataDir,
     MG_PORT: String(port),
     QUICKTONE_MIDI_ADAPTER: 'mock',
+    MG_ALLOW_PACKAGED_MOCK: '1',
     QUICKTONE_EXPERIMENTAL_EDIT: '0',
     MG_HEADLESS_EXIT_ON_BOOT_ERROR: '1',
   };
@@ -174,6 +175,14 @@ test.describe('MG Control Desktop Electron Shell — E2E', () => {
     await expect(window1.getByTestId('midi-connection-badge')).toHaveAttribute(
       'data-connection-state',
       'connected',
+    );
+    await expect(window1.getByTestId('midi-connection-badge')).toHaveAttribute(
+      'data-midi-mode',
+      'mock',
+    );
+    await expect(window1.getByTestId('midi-connection-badge')).toContainText('MOCK');
+    await expect(window1.getByTestId('midi-connection-badge')).not.toContainText(
+      'MG-300 Conectada',
     );
     await expect(window1.getByTestId('ws-connection-badge')).toHaveAttribute(
       'data-ws-status',
@@ -412,6 +421,11 @@ test.describe('MG Control Desktop Electron Shell — E2E', () => {
 
     await mainWindow.getByTestId('open-settings-btn').click();
     await expect(mainWindow.getByTestId('settings-modal')).toBeVisible();
+    await expect(mainWindow.getByTestId('lan-firewall-help')).toBeVisible();
+    await mainWindow.getByTestId('lan-firewall-help').locator('summary').click();
+    await expect(mainWindow.getByTestId('lan-firewall-help')).toHaveAttribute('open', '');
+    await mainWindow.getByTestId('export-diagnostics-btn').click();
+    await expect(mainWindow.getByTestId('diagnostics-export-result')).toBeVisible();
     await mainWindow.getByTestId('generate-pairing-qr-btn').click();
     await expect(mainWindow.getByTestId('lan-qr-card')).toBeVisible();
     await expect(mainWindow.getByTestId('pairing-challenge-box')).toBeVisible();
@@ -481,5 +495,77 @@ test.describe('MG Control Desktop Electron Shell — E2E', () => {
     await closeManagedElectron(primaryApp);
     await waitForPredicate(() => !isPidRunning(primaryPid!));
     expect(isPidRunning(primaryPid!)).toBe(false);
+  });
+
+  test('4. Sincronização LAN em tempo real entre navegador mobile pareado e app Electron', async () => {
+    const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mg-electron-lan-'));
+    const presetsDir = createTempPresetDir();
+    dirsToCleanup.push(userDataDir, presetsDir);
+
+    const port = await allocateFreePort();
+    const electronApp = await launchManagedElectron(userDataDir, port);
+    const mainWindow = await electronApp.firstWindow();
+    await expect(mainWindow.getByTestId('top-bar')).toBeVisible({ timeout: 20_000 });
+
+    const coreStatus = await mainWindow.evaluate(() => window.mgControl!.getCoreStatus());
+    const baseUrl = coreStatus.baseUrl!;
+
+    const cfgRes = await fetch(`${baseUrl}/api/presets/config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ directoryPath: presetsDir, includeFactoryPresets: true }),
+    });
+    expect(cfgRes.status).toBe(200);
+
+    await mainWindow.getByTestId('open-settings-btn').click();
+    await mainWindow.getByTestId('generate-pairing-qr-btn').click();
+    await expect(mainWindow.getByTestId('pairing-challenge-box')).toBeVisible();
+
+    const pairingStatusRes = await fetch(`${baseUrl}/api/pairing/status`);
+    const pairingStatus = (await pairingStatusRes.json()) as {
+      activeChallenge: { pairingCode: string } | null;
+    };
+    const pairingCode = pairingStatus.activeChallenge?.pairingCode;
+    expect(pairingCode).toBeTruthy();
+
+    const browser = await chromium.launch({ channel: 'chrome', headless: true });
+    try {
+      const mobileContext = await browser.newContext({
+        viewport: { width: 390, height: 844 },
+        extraHTTPHeaders: { 'x-forwarded-for': '192.168.1.91' },
+      });
+      const mobilePage = await mobileContext.newPage();
+      await mobilePage.goto(`${baseUrl}/?pair=${encodeURIComponent(pairingCode!)}`);
+      await expect(mobilePage.getByTestId('pairing-waiting-approval')).toBeVisible({
+        timeout: 15_000,
+      });
+
+      const approveBtn = mainWindow
+        .getByTestId('settings-modal')
+        .getByRole('button', { name: 'Autorizar' })
+        .first();
+      await expect(approveBtn).toBeVisible({ timeout: 10_000 });
+      await approveBtn.click();
+      await mainWindow.getByTestId('close-settings-btn').click();
+
+      await expect(mobilePage.getByTestId('volume-increase-btn')).toBeVisible({ timeout: 15_000 });
+      await mobilePage.getByTestId('volume-increase-btn').click();
+      await expect(mainWindow.getByTestId('volume-value')).toHaveText('55%');
+
+      await mobilePage.getByTestId('preset-card-1B').click();
+      await expect(mainWindow.getByTestId('preset-card-1B')).toHaveAttribute(
+        'data-status',
+        'command_sent_unconfirmed',
+      );
+      await mobileContext.close();
+    } finally {
+      await browser.close();
+    }
+
+    const corePid = readLatestCorePid(path.join(userDataDir, 'logs', 'desktop-main.log'));
+    await closeManagedElectron(electronApp);
+    if (corePid !== null) {
+      await waitForPredicate(() => !isPidRunning(corePid));
+    }
   });
 });

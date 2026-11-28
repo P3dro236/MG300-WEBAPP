@@ -93,6 +93,7 @@ try {
       MG_DATA_DIR: tempUserData,
       MG_PORT: String(port),
       QUICKTONE_MIDI_ADAPTER: 'mock',
+      MG_ALLOW_PACKAGED_MOCK: '1',
       QUICKTONE_EXPERIMENTAL_EDIT: '0',
       MG_HEADLESS_EXIT_ON_BOOT_ERROR: '1',
     },
@@ -116,6 +117,11 @@ try {
   const healthRes = await fetch(`${coreStatus.baseUrl}/api/health`);
   assert.equal(healthRes.status, 200);
 
+  const mockStatusRes = await fetch(`${coreStatus.baseUrl}/api/status`);
+  assert.equal(mockStatusRes.status, 200);
+  const mockStatusJson = await mockStatusRes.json();
+  assert.equal(mockStatusJson.midiAdapterMode, 'mock');
+
   const logContent = fs.readFileSync(path.join(tempUserData, 'logs', 'desktop-main.log'), 'utf8');
   const pidMatches = [...logContent.matchAll(/\(PID (\d+), LAN:/g)];
   assert.ok(pidMatches.length > 0, 'PID do Local Core não registrado no desktop-main.log');
@@ -129,8 +135,55 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   assert.equal(isPidRunning(corePid), false, `PID órfão detectado após fechar executável: ${corePid}`);
+
+  // Segunda verificação empacotada: SEM MG_ALLOW_PACKAGED_MOCK, mesmo com QUICKTONE_MIDI_ADAPTER=mock no ambiente,
+  // o runtime empacotado DEVE ignorar o mock, usar WinMmMidiAdapter ('hardware') e inicializar sem falhas.
+  const hardwareUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'mg-packaged-hw-smoke-'));
+  let hardwareApp = null;
+  try {
+    const hwPort = await allocateFreePort();
+    hardwareApp = await electron.launch({
+      executablePath: unpackedExe,
+      env: {
+        ...cleanEnv,
+        MG_DATA_DIR: hardwareUserData,
+        MG_PORT: String(hwPort),
+        QUICKTONE_MIDI_ADAPTER: 'mock',
+        QUICKTONE_EXPERIMENTAL_EDIT: '0',
+        MG_HEADLESS_EXIT_ON_BOOT_ERROR: '1',
+      },
+    });
+    const hwWindow = await hardwareApp.firstWindow();
+    await hwWindow.getByTestId('top-bar').waitFor({ state: 'visible', timeout: 20_000 });
+    const hwCoreStatus = await hwWindow.evaluate(() => window.mgControl?.getCoreStatus());
+    assert.equal(hwCoreStatus?.status, 'running');
+    const hwStatusRes = await fetch(`${hwCoreStatus.baseUrl}/api/status`);
+    assert.equal(hwStatusRes.status, 200);
+    const hwStatusJson = await hwStatusRes.json();
+    assert.equal(hwStatusJson.midiAdapterMode, 'hardware');
+
+    const hwLog = fs.readFileSync(path.join(hardwareUserData, 'logs', 'desktop-main.log'), 'utf8');
+    const hwPidMatches = [...hwLog.matchAll(/\(PID (\d+), LAN:/g)];
+    assert.ok(hwPidMatches.length > 0, 'PID do Core hardware não registrado');
+    const hwPid = Number(hwPidMatches[hwPidMatches.length - 1][1]);
+
+    await hardwareApp.close();
+    hardwareApp = null;
+
+    const hwDeadline = Date.now() + 5_000;
+    while (Date.now() < hwDeadline && isPidRunning(hwPid)) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.equal(isPidRunning(hwPid), false, `PID órfão detectado no smoke hardware: ${hwPid}`);
+  } finally {
+    if (hardwareApp) {
+      await hardwareApp.close().catch(() => undefined);
+    }
+    fs.rmSync(hardwareUserData, { recursive: true, force: true, maxRetries: 5, retryDelay: 150 });
+  }
+
   console.log(
-    `[smoke-packaged] PASS: ${unpackedExe} (isPackaged=true, installer=${installers[0]}, zero .map, zero orphan PID)`,
+    `[smoke-packaged] PASS: ${unpackedExe} (isPackaged=true, hardware-guard=verified, installer=${installers[0]}, zero .map, zero orphan PID)`,
   );
 } finally {
   if (launchedApp) {
