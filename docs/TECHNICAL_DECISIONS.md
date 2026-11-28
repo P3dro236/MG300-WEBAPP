@@ -23,3 +23,11 @@
 ## ADR-006: Política Centralizada e Controle Conjunto de Delay e Ambiência na IA
 - **Contexto**: Backups reais da MG-300 (`Sultans Clean`, `Hotel Solo`, `Shine On Clean`) mostraram inclusão desnecessária de `DLY` pela IA, ausência de perfis por finalidade musical, falta de validação de `Time` e acúmulo de `MOD + DLY + RVB` em série pós-`AMP`.
 - **Decisão**: Separar a arquitetura em IA (`mp`/`dp`) → Política Centralizada (`ambience-policy.ts` com perfis `NONE`, `RHYTHM`, `LEAD`, `AMBIENT`, `SLAPBACK` e limites por modelo) → Compilador (`tone-calibrator.ts`) → Validador Determinístico (`ambience-validator.ts` com orçamento conjunto e regra de bloco único) → Serializador (`sanitizeStruct102ForSysEx`) + Observabilidade (`tone-observability.ts`). Detalhes completos em [AI_DELAY_AMBIENCE_POLICY.md](./AI_DELAY_AMBIENCE_POLICY.md).
+
+## ADR-007 a ADR-018: Arquitetura Standalone Electron, Cloud Modular, Billing e Distribuição (S02)
+- **Contexto**: Evolução do controlador local para o produto **MG Control** (Electron Windows x64 standalone, preservação integral de MIDI/QuickTone/LAN offline e adição de Cloud `/v1` para Auth, dispositivos DPAPI, créditos, proxy Gemini e billing Cartão/Pix).
+- **Decisão**: Consolidar os ADRs `ADR-007` a `ADR-018`, os diagramas C4, os contratos versionados `v1` e o plano de migração/rollback em:
+  - [ADRs S02 (`ADR-007`..`ADR-018`)](./architecture/ADRS.md)
+  - [Arquitetura C4 e Limites](./architecture/C4-ARCHITECTURE.md)
+  - [Contratos Versionados v1](./architecture/CONTRACTS.md)
+  - [Plano de Migração e Rollback](./architecture/MIGRATION-AND-ROLLBACK.md)
