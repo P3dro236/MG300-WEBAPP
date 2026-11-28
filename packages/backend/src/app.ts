@@ -74,6 +74,25 @@ import {
 const CURRENT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_FRONTEND_DIST_DIR = path.resolve(CURRENT_DIR, '../../frontend/dist');
 
+function resolveDefaultStaticDir(): string {
+  const fromEnv = process.env.MG_STATIC_DIR?.trim();
+  if (fromEnv) {
+    return path.resolve(fromEnv);
+  }
+  if (fs.existsSync(DEFAULT_FRONTEND_DIST_DIR)) {
+    return DEFAULT_FRONTEND_DIST_DIR;
+  }
+  const siblingDist = path.resolve(CURRENT_DIR, '../frontend/dist');
+  if (fs.existsSync(siblingDist)) {
+    return siblingDist;
+  }
+  const siblingFrontend = path.resolve(CURRENT_DIR, '../frontend');
+  if (fs.existsSync(siblingFrontend)) {
+    return siblingFrontend;
+  }
+  return DEFAULT_FRONTEND_DIST_DIR;
+}
+
 const STATIC_MIME_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'application/javascript; charset=utf-8',
@@ -183,7 +202,7 @@ export function createBackendApp(options: BackendAppOptions = {}): QuickToneBack
   const allowedOrigins = options.allowedOrigins ?? [];
   const allowedHosts = options.allowedHosts ?? [];
   const staticDir =
-    options.staticDir !== undefined ? options.staticDir : DEFAULT_FRONTEND_DIST_DIR;
+    options.staticDir !== undefined ? options.staticDir : resolveDefaultStaticDir();
   const disposeStateManagerOnClose =
     options.disposeStateManagerOnClose ?? options.stateManager === undefined;
 
@@ -453,6 +472,9 @@ export function createBackendApp(options: BackendAppOptions = {}): QuickToneBack
         timestamp: new Date().toISOString(),
       });
     }
+
+    reply.header('X-Content-Type-Options', 'nosniff');
+    reply.header('Referrer-Policy', 'no-referrer');
 
     if (hasOrigin && isOriginAllowed) {
       reply.header('Access-Control-Allow-Origin', originHeader);
@@ -959,7 +981,9 @@ export function createBackendApp(options: BackendAppOptions = {}): QuickToneBack
       backupDir:
         options.experimentalBackupDir ??
         process.env.QUICKTONE_BACKUP_DIR ??
-        path.resolve(process.cwd(), 'backups'),
+        (process.env.MG_DATA_DIR?.trim()
+          ? path.join(path.resolve(process.env.MG_DATA_DIR.trim()), 'backups')
+          : path.resolve(process.cwd(), 'backups')),
       onPresetSaved: (slotIndex, struct102) => {
         stateManager.applySavedHardwarePreset(slotIndex, struct102);
       },
@@ -1039,7 +1063,11 @@ export function createBackendApp(options: BackendAppOptions = {}): QuickToneBack
 
   const geminiClient: GeminiClientLike = options.geminiClient ?? new GeminiClient();
   const gearStore = new AiGearStore({
-    filePath: options.aiGearPath ?? path.resolve(MONOREPO_ROOT, 'data', 'user-gear.json'),
+    filePath:
+      options.aiGearPath ??
+      (process.env.MG_DATA_DIR?.trim()
+        ? path.join(path.resolve(process.env.MG_DATA_DIR.trim()), 'data', 'user-gear.json')
+        : path.resolve(MONOREPO_ROOT, 'data', 'user-gear.json')),
     geminiClient,
   });
 
@@ -1165,6 +1193,7 @@ export function createBackendApp(options: BackendAppOptions = {}): QuickToneBack
             const contentType =
               STATIC_MIME_TYPES[ext] ?? 'application/octet-stream';
             const content = await fs.promises.readFile(candidatePath);
+            reply.header('X-Frame-Options', 'DENY');
             return reply.type(contentType).send(content);
           }
         } catch {
@@ -1175,6 +1204,7 @@ export function createBackendApp(options: BackendAppOptions = {}): QuickToneBack
       const indexHtmlPath = path.join(resolvedStaticRoot, 'index.html');
       try {
         const indexContent = await fs.promises.readFile(indexHtmlPath);
+        reply.header('X-Frame-Options', 'DENY');
         return reply.type('text/html; charset=utf-8').send(indexContent);
       } catch {
         // Fall through to 404

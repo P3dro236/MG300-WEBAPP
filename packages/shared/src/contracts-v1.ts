@@ -609,3 +609,17 @@ export const WebhookNormalizedEventV1Schema = z.object({
   receivedAt: z.string().datetime(),
 });
 export type WebhookNormalizedEventV1 = z.infer<typeof WebhookNormalizedEventV1Schema>;
+
+export interface MgControlDesktopBridgeV1 {
+  readonly contractVersion: typeof CONTRACT_VERSION_V1;
+  getAppInfo(): Promise<AppInfoV1>;
+  getCoreStatus(): Promise<LocalCoreStatusV1>;
+  restartCore(): Promise<LocalCoreStatusV1>;
+  exportDiagnostics(): Promise<DiagnosticsExportResultV1>;
+  openExternalUrl(url: string): Promise<OpenExternalUrlResponseV1>;
+  checkForUpdates(): Promise<UpdateCheckResultV1>;
+  getAuthSession(): Promise<AuthSessionResponseV1 | null>;
+  setAuthSession(session: AuthSessionResponseV1): Promise<AuthSessionResponseV1>;
+  clearAuthSession(): Promise<OkResponseV1>;
+  getDeviceIdentity(): Promise<DeviceIdentityV1>;
+}
