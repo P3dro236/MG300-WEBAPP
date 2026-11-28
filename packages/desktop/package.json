@@ -1,0 +1,20 @@
+{
+  "name": "@quicktone/desktop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "MG Control Desktop Electron shell (Windows x64)",
+  "author": "MG Control",
+  "license": "UNLICENSED",
+  "main": "./dist/main.js",
+  "scripts": {
+    "build": "node scripts/build-desktop.mjs",
+    "typecheck": "tsc --noEmit",
+    "package:win:dir": "electron-builder --win --x64 --dir --publish never --config electron-builder.yml",
+    "package:win:test": "electron-builder --win nsis --x64 --publish never --config electron-builder.yml",
+    "smoke:packaged": "node scripts/smoke-packaged.mjs"
+  },
+  "dependencies": {
+    "@quicktone/shared": "*",
+    "zod": "^3.24.2"
+  }
+}

@@ -1,0 +1,30 @@
+appId: com.mgcontrol.desktop
+productName: MG Control
+electronVersion: "35.7.5"
+electronDist: ../../node_modules/electron/dist
+asar: true
+publish: null
+directories:
+  output: release
+files:
+  - dist/**/*
+  - package.json
+extraResources:
+  - from: ../backend/dist/local-core.cjs
+    to: core/local-core.cjs
+  - from: ../frontend/dist
+    to: frontend
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  executableName: MG Control
+  signAndEditExecutable: false
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: MG Control
