@@ -22,6 +22,7 @@ export default defineConfig({
       ['packages/quicktone-reader/**', 'node'],
       ['packages/midi-service/**', 'node'],
       ['packages/backend/**', 'node'],
+      ['packages/desktop/**', 'node'],
     ],
   },
 });
