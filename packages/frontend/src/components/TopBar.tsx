@@ -2,6 +2,7 @@ import React from 'react';
 import { Settings } from 'lucide-react';
 import type {
   DeviceSyncStatus,
+  MidiAdapterMode,
   MidiConnectionState,
 } from '@quicktone/shared';
 import type { WsConnectionStatus } from '../api/client';
@@ -10,6 +11,7 @@ import { ConnectionBadge } from './ConnectionBadge';
 
 interface TopBarProps {
   connectionState: MidiConnectionState;
+  midiAdapterMode?: MidiAdapterMode;
   connectedPortName: string | null;
   wsStatus: WsConnectionStatus;
   syncStatus: DeviceSyncStatus;
@@ -22,6 +24,7 @@ interface TopBarProps {
 
 export const TopBar: React.FC<TopBarProps> = ({
   connectionState,
+  midiAdapterMode,
   connectedPortName,
   wsStatus,
   syncStatus,
@@ -46,6 +49,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         <div className="order-3 w-full md:order-2 md:w-auto">
           <ConnectionBadge
             connectionState={connectionState}
+            midiAdapterMode={midiAdapterMode}
             connectedPortName={connectedPortName}
             wsStatus={wsStatus}
             syncStatus={syncStatus}

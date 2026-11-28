@@ -3,6 +3,7 @@ import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CONTRACT_VERSION_V1, LocalCoreBootstrapEventV1Schema } from '@quicktone/shared';
+import { MockMidiAdapter, WinMmMidiAdapter } from '@quicktone/midi';
 import { loadEnvFiles, MONOREPO_ROOT } from './env.js';
 import {
   type BackendAppOptions,
@@ -23,6 +24,8 @@ import {
   type ControllerStateManagerOptions,
   getLocalLanAddresses,
   PresetNotFoundError,
+  resolveMidiAdapterSelection,
+  selectPrioritizedLanAddresses,
   type PresetsUpdatedListener,
   type StateChangeListener,
 } from './state-manager.js';
@@ -36,6 +39,8 @@ export {
   PairingError,
   computeLocalLanUrls,
   getLocalLanAddresses,
+  resolveMidiAdapterSelection,
+  selectPrioritizedLanAddresses,
   ControllerStateManager,
   PresetNotFoundError,
   type BackendAppOptions,
@@ -129,8 +134,18 @@ export async function startBackendServer(
   const preferredPort = resolvePreferredPort(options.port);
   const allowPortFallback =
     options.allowPortFallback ?? process.env.MG_ALLOW_PORT_FALLBACK === '1';
-  const isRealAdapter =
-    options.midiAdapter === undefined && process.env.QUICKTONE_MIDI_ADAPTER !== 'mock';
+  const adapterSelection = resolveMidiAdapterSelection({
+    explicitAdapter: options.midiAdapter,
+    envAdapter: process.env.QUICKTONE_MIDI_ADAPTER,
+    isPackaged: process.env.MG_IS_PACKAGED === '1',
+    allowPackagedMock: process.env.MG_ALLOW_PACKAGED_MOCK === '1',
+  });
+  if (adapterSelection.blockedPackagedMock) {
+    console.warn(
+      '[QuickTone Web Controller] QUICKTONE_MIDI_ADAPTER=mock bloqueado em runtime empacotado; iniciando com WinMmMidiAdapter real.',
+    );
+  }
+  const isRealAdapter = !adapterSelection.useMock;
 
   const resolvedDataDir = resolveConfiguredDataDir(options.dataDir);
   if (resolvedDataDir) {
@@ -202,6 +217,8 @@ export async function startBackendServer(
       experimentalBackupDir: defaultExperimentalBackupDir,
       ...(resolvedStaticDir !== undefined ? { staticDir: resolvedStaticDir } : {}),
       ...restOptions,
+      midiAdapter:
+        options.midiAdapter ?? (isRealAdapter ? new WinMmMidiAdapter() : new MockMidiAdapter()),
       serverPort: effectiveServerPort,
       pairingOptions: {
         trustedDevicesPath: defaultTrustedDevicesPath,
@@ -217,7 +234,7 @@ export async function startBackendServer(
           ? boundAddress.port
           : candidatePort;
       const lanUrls = getLocalLanAddresses().map((ip) => `http://${ip}:${actualPort}`);
-      app.stateManager.setLanUrls(lanUrls);
+      app.stateManager.setLanUrls(lanUrls, actualPort);
 
       return {
         app,

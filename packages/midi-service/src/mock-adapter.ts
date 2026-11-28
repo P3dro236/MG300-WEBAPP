@@ -16,6 +16,7 @@ const DEFAULT_MOCK_PORTS: MidiPortInfo[] = [
 ];
 
 export class MockMidiAdapter implements IMidiAdapter {
+  public readonly isMock = true;
   private ports: MidiPortInfo[];
   private savedPortsBeforeDisconnect: MidiPortInfo[] | null = null;
   private connectedPortName: string | null = null;

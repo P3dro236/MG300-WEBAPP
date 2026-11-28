@@ -115,9 +115,14 @@ export class MidiService {
     return this.connectionState === 'connected' && this.adapter.isConnected();
   }
 
+  public isMockAdapter(): boolean {
+    return this.adapter.isMock === true;
+  }
+
   public getState(): MidiServiceStateSnapshot {
     return {
       connectionState: this.connectionState,
+      midiAdapterMode: this.isMockAdapter() ? 'mock' : 'hardware',
       connectedPortName: this.connectedPortName,
       availablePorts: this.availablePorts.map((p) => ({ ...p })),
       syncStatus: this.syncStatus,
@@ -181,6 +186,22 @@ export class MidiService {
     });
     this.connectInFlight = promise;
     return promise;
+  }
+
+  public async triggerReconnectAttempt(): Promise<void> {
+    if (this.connectionState !== 'reconnecting') {
+      return;
+    }
+    const targetPort = this.lastTargetPortName ?? 'NUX MG-300';
+    if (this.isReconnectAttemptInFlight) {
+      return;
+    }
+    this.isReconnectAttemptInFlight = true;
+    try {
+      await this.tryReconnectOnce(targetPort);
+    } finally {
+      this.isReconnectAttemptInFlight = false;
+    }
   }
 
   private async performConnect(trimmedPortName?: string): Promise<void> {

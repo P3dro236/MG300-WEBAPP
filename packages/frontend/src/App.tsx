@@ -291,6 +291,7 @@ export function App({ reconnectBaseDelayMs }: AppProps = {}): React.ReactElement
 
       <TopBar
         connectionState={controllerState.connectionState}
+        midiAdapterMode={controllerState.midiAdapterMode}
         connectedPortName={controllerState.connectedPortName}
         wsStatus={controller.wsStatus}
         syncStatus={controllerState.syncStatus}
@@ -378,9 +379,9 @@ export function App({ reconnectBaseDelayMs }: AppProps = {}): React.ReactElement
         connectedPortName={controllerState.connectedPortName}
         isLocalDesktop={pairing.pairingStatus.isLocalDesktop}
         lanUrls={
-          pairing.pairingStatus.lanUrls.length > 0
-            ? pairing.pairingStatus.lanUrls
-            : controllerState.lanUrls
+          controller.hasLoadedInitialState
+            ? controllerState.lanUrls
+            : pairing.pairingStatus.lanUrls
         }
         activeSession={pairing.pairingStatus.activeSession}
         pendingRequests={pairing.pairingStatus.pendingRequests}

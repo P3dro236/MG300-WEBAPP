@@ -1,5 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AlertCircle, CheckCircle2, Guitar, X } from 'lucide-react';
+import {
+  AlertCircle,
+  Check,
+  CheckCircle2,
+  Copy,
+  FileDown,
+  Guitar,
+  Shield,
+  X,
+} from 'lucide-react';
 import type {
   AiGearConfig,
   MidiPortInfo,
@@ -74,6 +83,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [savingGear, setSavingGear] = useState(false);
   const [gearError, setGearError] = useState<string | null>(null);
   const [gearSavedNotice, setGearSavedNotice] = useState(false);
+  const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
+  const [exportingDiag, setExportingDiag] = useState(false);
+  const [diagResultText, setDiagResultText] = useState<string | null>(null);
+  const [diagErrorText, setDiagErrorText] = useState<string | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const wasOpenRef = useRef(false);
 
@@ -89,6 +102,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setGearDirty(false);
       setGearError(null);
       setGearSavedNotice(false);
+      setCopiedUrl(null);
+      setDiagResultText(null);
+      setDiagErrorText(null);
     }
     setSelectedPort((prev) => {
       const prevStillAvailable = Boolean(prev) && availablePorts.some((p) => p.name === prev);
@@ -130,6 +146,43 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const remainingSeconds = formatSecondsRemaining(activeChallenge?.expiresAt, nowMs);
   const challengeExpired = Boolean(activeChallenge) && remainingSeconds <= 0;
+  const hasDesktopBridge = typeof window !== 'undefined' && Boolean(window.mgControl);
+  const detectedPort = (() => {
+    if (lanUrls.length === 0) return '3001';
+    try {
+      return new URL(lanUrls[0]!).port || '3001';
+    } catch {
+      return '3001';
+    }
+  })();
+
+  const handleCopyLanUrl = async (url: string): Promise<void> => {
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(url);
+        setCopiedUrl(url);
+      }
+    } catch {
+      setCopiedUrl(null);
+    }
+  };
+
+  const handleExportDiagnostics = async (): Promise<void> => {
+    if (!window.mgControl || exportingDiag) return;
+    setExportingDiag(true);
+    setDiagErrorText(null);
+    setDiagResultText(null);
+    try {
+      const result = await window.mgControl.exportDiagnostics();
+      setDiagResultText(`Diagnóstico sanitizado exportado em: ${result.exportedPath}`);
+    } catch (err) {
+      setDiagErrorText(
+        err instanceof Error ? err.message : 'Falha ao exportar diagnóstico local.',
+      );
+    } finally {
+      setExportingDiag(false);
+    }
+  };
 
   const handleGenerateQr = async (): Promise<void> => {
     setGeneratingQr(true);
@@ -442,6 +495,46 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </button>
               </div>
 
+              {lanUrls.length > 0 ? (
+                <div className="flex flex-col gap-1.5">
+                  <span className="font-mono text-[11px] uppercase tracking-wider text-text-muted tabular-nums">
+                    Endereços LAN detectados (porta {detectedPort})
+                  </span>
+                  {lanUrls.map((url) => {
+                    const isCopied = copiedUrl === url;
+                    return (
+                      <div
+                        key={url}
+                        className="flex flex-wrap items-center justify-between gap-2 rounded-[var(--radius-sm)] border border-border-subtle bg-bg-recess px-2.5 py-1.5"
+                      >
+                        <code
+                          data-testid="lan-url-item"
+                          className="font-mono text-[11px] text-text-muted break-all tabular-nums"
+                        >
+                          {url}
+                        </code>
+                        <button
+                          type="button"
+                          onClick={() => void handleCopyLanUrl(url)}
+                          className="inline-flex min-h-[44px] items-center gap-1.5 rounded-[var(--radius-sm)] border border-border-subtle bg-bg-surface px-2.5 font-mono text-[11px] text-text-primary transition-colors duration-150 hover:border-border-hover lg:min-h-[32px] cursor-pointer"
+                        >
+                          {isCopied ? (
+                            <Check className="h-3.5 w-3.5 text-status-confirmed" strokeWidth={1.75} aria-hidden="true" />
+                          ) : (
+                            <Copy className="h-3.5 w-3.5 text-text-muted" strokeWidth={1.75} aria-hidden="true" />
+                          )}
+                          <span>{isCopied ? 'Copiado' : 'Copiar'}</span>
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="font-sans text-xs text-text-muted">
+                  Nenhuma interface Wi-Fi/LAN ativa detectada neste momento.
+                </p>
+              )}
+
               {activeChallenge && !challengeExpired ? (
                 <div
                   data-testid="pairing-challenge-box"
@@ -455,19 +548,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       Aponte a câmera do celular conectado ao mesmo Wi-Fi. Após ler o QR Code,
                       autorize a conexão aqui no computador.
                     </p>
-                    {lanUrls.length > 0 ? (
-                      <div className="flex flex-col gap-1">
-                        {lanUrls.map((url) => (
-                          <code
-                            key={url}
-                            data-testid="lan-url-item"
-                            className="rounded-[var(--radius-sm)] border border-border-subtle bg-bg-surface px-2.5 py-1 font-mono text-[11px] text-text-muted break-all"
-                          >
-                            {url}
-                          </code>
-                        ))}
-                      </div>
-                    ) : null}
                   </div>
 
                   <div className="shrink-0">
@@ -480,6 +560,33 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   liberar um pareamento temporário de uso único.
                 </p>
               )}
+
+              <details
+                data-testid="lan-firewall-help"
+                className="rounded-[var(--radius-md)] border border-border-subtle bg-bg-recess px-3 py-2.5"
+              >
+                <summary className="flex min-h-[36px] cursor-pointer items-center gap-2 font-mono text-[11px] font-semibold uppercase tracking-wider text-text-primary">
+                  <Shield className="h-3.5 w-3.5 shrink-0 text-text-muted" strokeWidth={1.75} aria-hidden="true" />
+                  <span>Celular não conecta? Rede LAN e Windows Firewall</span>
+                </summary>
+                <ul className="mt-2.5 flex flex-col gap-1.5 border-t border-border-subtle pt-2.5 font-sans text-xs leading-relaxed text-text-muted">
+                  <li>
+                    <strong className="text-text-primary">Mesma rede local (sem internet):</strong>{' '}
+                    PC e celular precisam estar no mesmo roteador Wi-Fi ou ponto de acesso; o
+                    controle funciona 100% offline.
+                  </li>
+                  <li>
+                    <strong className="text-text-primary">Windows Defender Firewall:</strong>{' '}
+                    permita acesso do <strong className="text-text-primary">MG Control</strong> em
+                    redes <strong className="text-text-primary">Privadas</strong> na porta TCP{' '}
+                    <span className="font-mono text-text-primary tabular-nums">{detectedPort}</span>.
+                  </li>
+                  <li>
+                    <strong className="text-text-primary">Isolamento de rede:</strong> evite redes
+                    Wi-Fi de visitantes (AP Isolation) e VPNs corporativas ativas no computador.
+                  </li>
+                </ul>
+              </details>
 
               {pendingRequests.length > 0 ? (
                 <div className="flex flex-col gap-2 border-t border-border-subtle pt-4">
@@ -620,6 +727,50 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
                 )}
               </div>
+
+              {hasDesktopBridge ? (
+                <div
+                  data-testid="desktop-diagnostics-section"
+                  className="flex flex-col gap-2 border-t border-border-subtle pt-4"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <span className="font-mono text-[11px] font-semibold uppercase tracking-wider text-text-primary">
+                        Diagnóstico Local (Desktop)
+                      </span>
+                      <p className="mt-0.5 font-sans text-xs text-text-muted">
+                        Gera relatório sanitizado (sem tokens, IPs LAN ou credenciais) em AppData.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      data-testid="export-diagnostics-btn"
+                      disabled={exportingDiag}
+                      onClick={() => void handleExportDiagnostics()}
+                      className="inline-flex min-h-[44px] items-center gap-2 rounded-[var(--radius-md)] border border-border-strong bg-bg-elevated px-3 font-sans text-xs font-semibold text-text-primary transition-colors duration-150 hover:border-border-hover disabled:opacity-50 lg:min-h-[38px] cursor-pointer"
+                    >
+                      <FileDown className="h-3.5 w-3.5 text-text-muted" strokeWidth={1.75} aria-hidden="true" />
+                      <span>{exportingDiag ? 'Exportando…' : 'Exportar diagnóstico'}</span>
+                    </button>
+                  </div>
+                  {diagResultText ? (
+                    <p
+                      data-testid="diagnostics-export-result"
+                      className="rounded-[var(--radius-sm)] border border-status-confirmed-border bg-status-confirmed-bg px-2.5 py-1.5 font-mono text-[11px] text-status-confirmed break-all"
+                    >
+                      {diagResultText}
+                    </p>
+                  ) : null}
+                  {diagErrorText ? (
+                    <p
+                      role="alert"
+                      className="rounded-[var(--radius-sm)] border border-status-error-border bg-status-error-bg px-2.5 py-1.5 font-sans text-xs text-status-error"
+                    >
+                      {diagErrorText}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
           ) : (
             <div className="flex flex-col gap-3 border-t border-border-subtle pt-5">

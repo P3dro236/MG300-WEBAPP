@@ -250,6 +250,7 @@ export class LocalCoreSupervisor {
       MG_PORT: String(this.preferredPort),
       MG_ALLOW_PORT_FALLBACK: '1',
       MG_CORE_IPC_STDIN: '1',
+      MG_IS_PACKAGED: this.paths.isPackaged ? '1' : '0',
       MG_DATA_DIR: this.paths.dataDir,
       MG_STATIC_DIR: this.paths.staticDir,
       QUICKTONE_MIDI_LOG_FILE: this.paths.midiLogFilePath,
@@ -264,6 +265,9 @@ export class LocalCoreSupervisor {
     });
 
     this.child = child;
+    child.stdin.on('error', (err) => {
+      this.logLine('warn', `Erro no stdin do Local Core: ${sanitizeLogText(err.message)}`);
+    });
     this.lastError = null;
     this.consecutiveHealthFailures = 0;
 

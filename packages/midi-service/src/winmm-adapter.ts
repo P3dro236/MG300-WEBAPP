@@ -1,5 +1,5 @@
 import { type ChildProcessWithoutNullStreams, execFile, spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -14,6 +14,7 @@ import { type IMidiAdapter, isMg300PortName, MidiServiceError } from './types.js
 
 export interface WinMmMidiAdapterOptions {
   powershellExecutable?: string;
+  powershellArgsBuilder?: (scriptPath: string) => string[];
   allowSystemSynth?: boolean;
   commandTimeoutMs?: number;
   logger?: MidiDiagnosticsLogger;
@@ -583,6 +584,29 @@ let cachedDllPath: string | null = null;
 let cachedListScriptPath: string | null = null;
 let cachedWorkerScriptPath: string | null = null;
 
+function writeBridgeFileAtomicIfMissing(targetPath: string, content: string): void {
+  if (fs.existsSync(targetPath)) {
+    return;
+  }
+  const tempPath = `${targetPath}.tmp-${process.pid}-${randomUUID()}`;
+  try {
+    fs.writeFileSync(tempPath, content, 'utf8');
+    try {
+      fs.renameSync(tempPath, targetPath);
+    } catch {
+      if (!fs.existsSync(targetPath)) {
+        throw new Error(`Failed to persist WinMM bridge file: ${targetPath}`);
+      }
+      fs.rmSync(tempPath, { force: true });
+    }
+  } catch (err) {
+    fs.rmSync(tempPath, { force: true });
+    if (!fs.existsSync(targetPath)) {
+      throw err;
+    }
+  }
+}
+
 function ensureWinMmBridgeFiles(): {
   csPath: string;
   dllPath: string;
@@ -607,7 +631,13 @@ function ensureWinMmBridgeFiles(): {
     };
   }
 
-  const hash = createHash('sha256').update(WINMM_CSHARP_SOURCE).digest('hex').slice(0, 12);
+  const WINMM_BRIDGE_SCRIPT_VERSION = 'v2';
+  const hash = createHash('sha256')
+    .update(WINMM_CSHARP_SOURCE)
+    .update('\n')
+    .update(WINMM_BRIDGE_SCRIPT_VERSION)
+    .digest('hex')
+    .slice(0, 12);
   const bridgeDir = path.join(os.tmpdir(), `quicktone-winmm-${hash}`);
   fs.mkdirSync(bridgeDir, { recursive: true });
 
@@ -616,22 +646,32 @@ function ensureWinMmBridgeFiles(): {
   const listScriptPath = path.join(bridgeDir, 'list-ports.ps1');
   const workerScriptPath = path.join(bridgeDir, 'worker.ps1');
 
-  if (!fs.existsSync(csPath)) {
-    fs.writeFileSync(csPath, WINMM_CSHARP_SOURCE, 'utf8');
-  }
+  writeBridgeFileAtomicIfMissing(csPath, WINMM_CSHARP_SOURCE);
 
   const csLiteral = csPath.replace(/'/g, "''");
   const dllLiteral = dllPath.replace(/'/g, "''");
   const loadAssemblySnippet = [
     `if (Test-Path -LiteralPath '${dllLiteral}') {`,
-    `  Add-Type -Path '${dllLiteral}'`,
+    `  try {`,
+    `    Add-Type -Path '${dllLiteral}'`,
+    `  } catch {`,
+    `    Add-Type -Path '${csLiteral}'`,
+    `  }`,
     `} else {`,
     `  try {`,
     `    Add-Type -Path '${csLiteral}' -OutputAssembly '${dllLiteral}'`,
-    `    Add-Type -Path '${dllLiteral}'`,
+    `    try {`,
+    `      Add-Type -Path '${dllLiteral}'`,
+    `    } catch {`,
+    `      Add-Type -Path '${csLiteral}'`,
+    `    }`,
     `  } catch {`,
     `    if (Test-Path -LiteralPath '${dllLiteral}') {`,
-    `      Add-Type -Path '${dllLiteral}'`,
+    `      try {`,
+    `        Add-Type -Path '${dllLiteral}'`,
+    `      } catch {`,
+    `        Add-Type -Path '${csLiteral}'`,
+    `      }`,
     `    } else {`,
     `      Add-Type -Path '${csLiteral}'`,
     `    }`,
@@ -654,8 +694,8 @@ function ensureWinMmBridgeFiles(): {
     '[QuickToneWinMm.Bridge]::RunWorker($env:QUICKTONE_MIDI_TARGET)',
   ].join('\r\n');
 
-  fs.writeFileSync(listScriptPath, listScript, 'utf8');
-  fs.writeFileSync(workerScriptPath, workerScript, 'utf8');
+  writeBridgeFileAtomicIfMissing(listScriptPath, listScript);
+  writeBridgeFileAtomicIfMissing(workerScriptPath, workerScript);
 
   cachedBridgeDir = bridgeDir;
   cachedCsPath = csPath;
@@ -664,6 +704,69 @@ function ensureWinMmBridgeFiles(): {
   cachedWorkerScriptPath = workerScriptPath;
 
   return { csPath, dllPath, listScriptPath, workerScriptPath };
+}
+
+export function groupWinMmRawPorts(
+  raw: { in: readonly string[]; out: readonly string[] },
+  allowSystemSynth = false,
+): MidiPortInfo[] {
+  const grouped = new Map<
+    string,
+    { name: string; hasIn: boolean; hasOut: boolean }
+  >();
+
+  for (const rawIn of raw.in) {
+    const trimmedIn = rawIn.trim();
+    if (trimmedIn.length === 0) {
+      continue;
+    }
+    if (!allowSystemSynth && trimmedIn.toLowerCase() === SYSTEM_SYNTH_NAME) {
+      continue;
+    }
+    const baseName = normalizeMidiBasePortName(trimmedIn);
+    const key = baseName.toLowerCase();
+    const existing = grouped.get(key) ?? { name: baseName, hasIn: false, hasOut: false };
+    existing.hasIn = true;
+    grouped.set(key, existing);
+  }
+
+  for (const rawOut of raw.out) {
+    const trimmedOut = rawOut.trim();
+    if (trimmedOut.length === 0) {
+      continue;
+    }
+    if (!allowSystemSynth && trimmedOut.toLowerCase() === SYSTEM_SYNTH_NAME) {
+      continue;
+    }
+    const baseName = normalizeMidiBasePortName(trimmedOut);
+    const key = baseName.toLowerCase();
+    const existing = grouped.get(key) ?? { name: baseName, hasIn: false, hasOut: false };
+    existing.hasOut = true;
+    grouped.set(key, existing);
+  }
+
+  const ports: MidiPortInfo[] = [];
+  for (const entry of grouped.values()) {
+    const direction: MidiPortInfo['direction'] =
+      entry.hasIn && entry.hasOut ? 'duplex' : entry.hasIn ? 'in' : 'out';
+
+    ports.push({
+      id: entry.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+      name: entry.name,
+      direction,
+      isMg300: isMg300PortName(entry.name),
+    });
+  }
+
+  return ports.sort((a, b) => {
+    const mgDiff = Number(b.isMg300) - Number(a.isMg300);
+    if (mgDiff !== 0) {
+      return mgDiff;
+    }
+    const aDuplex = a.direction === 'duplex' ? 1 : 0;
+    const bDuplex = b.direction === 'duplex' ? 1 : 0;
+    return bDuplex - aDuplex;
+  });
 }
 
 export class WinMmSendAckError extends Error {
@@ -682,7 +785,9 @@ const USER_FRIENDLY_SEND_ERROR =
   'Não foi possível enviar o comando para a pedaleira. Verifique o cabo USB ou reconecte a NUX MG-300.';
 
 export class WinMmMidiAdapter implements IMidiAdapter {
+  public readonly isMock = false;
   private readonly powershellExecutable: string;
+  private readonly powershellArgsBuilder: (scriptPath: string) => string[];
   private readonly allowSystemSynth: boolean;
   private readonly commandTimeoutMs: number;
   private readonly logger: MidiDiagnosticsLogger;
@@ -706,6 +811,16 @@ export class WinMmMidiAdapter implements IMidiAdapter {
 
   constructor(options: WinMmMidiAdapterOptions = {}) {
     this.powershellExecutable = options.powershellExecutable ?? 'powershell.exe';
+    this.powershellArgsBuilder =
+      options.powershellArgsBuilder ??
+      ((scriptPath) => [
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        scriptPath,
+      ]);
     this.allowSystemSynth = options.allowSystemSynth ?? false;
     this.commandTimeoutMs = options.commandTimeoutMs ?? 12000;
     this.logger = options.logger ?? getSharedMidiDiagnosticsLogger();
@@ -713,55 +828,7 @@ export class WinMmMidiAdapter implements IMidiAdapter {
 
   public async listPorts(): Promise<MidiPortInfo[]> {
     const raw = await this.runListPortsQuery();
-    const grouped = new Map<
-      string,
-      { name: string; hasIn: boolean; hasOut: boolean }
-    >();
-
-    for (const rawIn of raw.in) {
-      if (!this.allowSystemSynth && rawIn.trim().toLowerCase() === SYSTEM_SYNTH_NAME) {
-        continue;
-      }
-      const baseName = normalizeMidiBasePortName(rawIn);
-      const key = baseName.toLowerCase();
-      const existing = grouped.get(key) ?? { name: baseName, hasIn: false, hasOut: false };
-      existing.hasIn = true;
-      grouped.set(key, existing);
-    }
-
-    for (const rawOut of raw.out) {
-      if (!this.allowSystemSynth && rawOut.trim().toLowerCase() === SYSTEM_SYNTH_NAME) {
-        continue;
-      }
-      const baseName = normalizeMidiBasePortName(rawOut);
-      const key = baseName.toLowerCase();
-      const existing = grouped.get(key) ?? { name: baseName, hasIn: false, hasOut: false };
-      existing.hasOut = true;
-      grouped.set(key, existing);
-    }
-
-    const ports: MidiPortInfo[] = [];
-    for (const entry of grouped.values()) {
-      const direction: MidiPortInfo['direction'] =
-        entry.hasIn && entry.hasOut ? 'duplex' : entry.hasIn ? 'in' : 'out';
-
-      ports.push({
-        id: entry.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
-        name: entry.name,
-        direction,
-        isMg300: isMg300PortName(entry.name),
-      });
-    }
-
-    return ports.sort((a, b) => {
-      const mgDiff = Number(b.isMg300) - Number(a.isMg300);
-      if (mgDiff !== 0) {
-        return mgDiff;
-      }
-      const aDuplex = a.direction === 'duplex' ? 1 : 0;
-      const bDuplex = b.direction === 'duplex' ? 1 : 0;
-      return bDuplex - aDuplex;
-    });
+    return groupWinMmRawPorts(raw, this.allowSystemSynth);
   }
 
   public async openPort(portName: string): Promise<{ portName: string }> {
@@ -799,7 +866,7 @@ export class WinMmMidiAdapter implements IMidiAdapter {
 
       const child = spawn(
         this.powershellExecutable,
-        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', workerScriptPath],
+        this.powershellArgsBuilder(workerScriptPath),
         {
           stdio: ['pipe', 'pipe', 'pipe'],
           windowsHide: true,
@@ -810,6 +877,13 @@ export class WinMmMidiAdapter implements IMidiAdapter {
         },
       );
       this.worker = child;
+      child.stdin.on('error', (err) => {
+        this.logger.warn('winmm.stdin', 'WinMM worker stdin stream error', {
+          targetPort: trimmed,
+          pid: child.pid,
+          error: err.message,
+        });
+      });
 
       child.stderr.on('data', (chunk: Buffer | string) => {
         const text = chunk.toString().trim();
@@ -1238,7 +1312,14 @@ export class WinMmMidiAdapter implements IMidiAdapter {
     if (this.worker) {
       const current = this.worker;
       this.worker = null;
-      if (!current.killed) {
+      try {
+        if (current.stdin.writable) {
+          current.stdin.end();
+        }
+      } catch {
+        // Ignore stdin close errors on already terminated child
+      }
+      if (!current.killed && current.exitCode === null) {
         try {
           current.kill();
         } catch {
@@ -1253,7 +1334,7 @@ export class WinMmMidiAdapter implements IMidiAdapter {
       const { listScriptPath } = ensureWinMmBridgeFiles();
       execFile(
         this.powershellExecutable,
-        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', listScriptPath],
+        this.powershellArgsBuilder(listScriptPath),
         { timeout: this.commandTimeoutMs, windowsHide: true },
         (err, stdout, stderr) => {
           if (err || !stdout) {

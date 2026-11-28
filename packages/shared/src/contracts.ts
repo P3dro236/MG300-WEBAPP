@@ -150,8 +150,12 @@ export const PresetsDirectoryStatusSchema = z.enum([
 ]);
 export type PresetsDirectoryStatus = z.infer<typeof PresetsDirectoryStatusSchema>;
 
+export const MidiAdapterModeSchema = z.enum(['hardware', 'mock']);
+export type MidiAdapterMode = z.infer<typeof MidiAdapterModeSchema>;
+
 export const ControllerStateSchema = z.object({
   connectionState: MidiConnectionStateSchema,
+  midiAdapterMode: MidiAdapterModeSchema.optional(),
   connectedPortName: z.string().nullable(),
   availablePorts: z.array(MidiPortInfoSchema),
   syncStatus: DeviceSyncStatusSchema,

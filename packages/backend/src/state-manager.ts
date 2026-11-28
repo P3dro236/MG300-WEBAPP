@@ -27,6 +27,7 @@ import {
   MockMidiAdapter,
   WinMmMidiAdapter,
 } from '@quicktone/midi';
+import type { MidiConnectionState } from '@quicktone/shared';
 
 export class PresetNotFoundError extends Error {
   public readonly code = 'PRESET_NOT_FOUND';
@@ -54,29 +55,83 @@ export interface ControllerStateManagerOptions {
   autoConnectMidiOnInit?: boolean;
 }
 
+const VIRTUAL_ADAPTER_NAME_RE =
+  /vethernet|wsl|hyper-v|docker|vmware|virtualbox|vbox|loopback|tailscale|zerotier|hamachi|\btun\b|\btap\b/i;
+
+function isPrivate172Address(ip: string): boolean {
+  if (!ip.startsWith('172.')) {
+    return false;
+  }
+  const secondOctet = Number(ip.split('.')[1]);
+  return Number.isInteger(secondOctet) && secondOctet >= 16 && secondOctet <= 31;
+}
+
 function getLanAddressPriority(ip: string): number {
   if (ip.startsWith('192.168.')) return 0;
   if (ip.startsWith('10.')) return 1;
-  if (ip.startsWith('172.')) return 2;
+  if (isPrivate172Address(ip)) return 2;
   return 3;
 }
 
-export function getLocalLanAddresses(): string[] {
-  const interfaces = os.networkInterfaces();
-  const addresses: string[] = [];
-  for (const entries of Object.values(interfaces)) {
+export function selectPrioritizedLanAddresses(
+  interfaces: NodeJS.Dict<os.NetworkInterfaceInfo[]>,
+): string[] {
+  const physical: string[] = [];
+  const virtual: string[] = [];
+
+  for (const [adapterName, entries] of Object.entries(interfaces)) {
     if (!entries) {
       continue;
     }
+    const isVirtual = VIRTUAL_ADAPTER_NAME_RE.test(adapterName);
     for (const entry of entries) {
-      if (entry.family === 'IPv4' && !entry.internal) {
-        addresses.push(entry.address);
+      if (entry.family !== 'IPv4' || entry.internal) {
+        continue;
+      }
+      if (entry.address.startsWith('169.254.')) {
+        continue;
+      }
+      if (isVirtual) {
+        virtual.push(entry.address);
+      } else {
+        physical.push(entry.address);
       }
     }
   }
-  return Array.from(new Set(addresses)).sort(
+
+  const pool = physical.length > 0 ? physical : virtual;
+  return Array.from(new Set(pool)).sort(
     (a, b) => getLanAddressPriority(a) - getLanAddressPriority(b),
   );
+}
+
+export function getLocalLanAddresses(): string[] {
+  return selectPrioritizedLanAddresses(os.networkInterfaces());
+}
+
+export function resolveMidiAdapterSelection(input: {
+  explicitAdapter?: IMidiAdapter;
+  envAdapter?: string;
+  isPackaged?: boolean;
+  allowPackagedMock?: boolean;
+}): { useMock: boolean; blockedPackagedMock: boolean } {
+  if (input.explicitAdapter) {
+    return {
+      useMock: input.explicitAdapter.isMock === true,
+      blockedPackagedMock: false,
+    };
+  }
+  const requestedMock = input.envAdapter?.trim().toLowerCase() === 'mock';
+  if (requestedMock && input.isPackaged && !input.allowPackagedMock) {
+    return {
+      useMock: false,
+      blockedPackagedMock: true,
+    };
+  }
+  return {
+    useMock: requestedMock,
+    blockedPackagedMock: false,
+  };
 }
 
 export function resolveServerPort(rawPort: string | number | undefined, fallback = 3001): number {
@@ -108,6 +163,7 @@ export class ControllerStateManager {
   private readonly useFilesystemDiscovery: boolean;
   private readonly presetsDirectoryOption: string | null;
   private authToken: string | null;
+  private serverPort: number;
   private lanUrls: string[];
   private diskPresetsResponse: PresetsResponse;
   private presetsResponse: PresetsResponse;
@@ -142,11 +198,20 @@ export class ControllerStateManager {
     if (options.midiService) {
       this.midiService = options.midiService;
     } else {
+      const adapterSelection = resolveMidiAdapterSelection({
+        explicitAdapter: options.midiAdapter,
+        envAdapter: process.env.QUICKTONE_MIDI_ADAPTER,
+        isPackaged: process.env.MG_IS_PACKAGED === '1',
+        allowPackagedMock: process.env.MG_ALLOW_PACKAGED_MOCK === '1',
+      });
+      if (adapterSelection.blockedPackagedMock) {
+        console.warn(
+          '[QuickTone Web Controller] QUICKTONE_MIDI_ADAPTER=mock bloqueado em runtime empacotado; iniciando com WinMmMidiAdapter real.',
+        );
+      }
       const adapter: IMidiAdapter =
         options.midiAdapter ??
-        (process.env.QUICKTONE_MIDI_ADAPTER === 'mock'
-          ? new MockMidiAdapter()
-          : new WinMmMidiAdapter());
+        (adapterSelection.useMock ? new MockMidiAdapter() : new WinMmMidiAdapter());
       this.midiService = new MidiService(adapter, options.midiOptions);
     }
 
@@ -159,9 +224,8 @@ export class ControllerStateManager {
     this.fillMissingUserSlots = options.fillMissingUserSlots ?? false;
     this.enableSysExSync =
       options.enableSysExSync ?? options.midiOptions?.enableSysExQueries ?? false;
-    this.lanUrls =
-      options.lanUrls ??
-      computeLocalLanUrls(resolveServerPort(options.serverPort ?? process.env.PORT));
+    this.serverPort = resolveServerPort(options.serverPort ?? process.env.PORT);
+    this.lanUrls = options.lanUrls ?? computeLocalLanUrls(this.serverPort);
     this.diskPresetsResponse = this.useFilesystemDiscovery
       ? this.discoveryService.getLastResult()
       : {
@@ -238,9 +302,48 @@ export class ControllerStateManager {
     this.emitStateChange();
   }
 
-  public setLanUrls(urls: string[]): void {
+  public setLanUrls(urls: string[], port?: number): void {
+    if (port !== undefined && Number.isInteger(port) && port > 0 && port <= 65535) {
+      this.serverPort = port;
+    }
     this.lanUrls = Array.from(new Set(urls));
     this.emitStateChange();
+  }
+
+  public refreshLanUrls(port?: number): string[] {
+    if (port !== undefined && Number.isInteger(port) && port > 0 && port <= 65535) {
+      this.serverPort = port;
+    }
+    const nextUrls = computeLocalLanUrls(this.serverPort);
+    const changed =
+      nextUrls.length !== this.lanUrls.length ||
+      nextUrls.some((url, idx) => url !== this.lanUrls[idx]);
+    if (changed) {
+      this.lanUrls = nextUrls;
+      this.emitStateChange();
+    }
+    return [...this.lanUrls];
+  }
+
+  public async handleSystemResume(port?: number): Promise<{
+    lanUrls: string[];
+    midiConnectionState: MidiConnectionState;
+  }> {
+    const lanUrls = this.refreshLanUrls(port);
+    const currentMidiState = this.midiService.getState().connectionState;
+    if (currentMidiState === 'reconnecting') {
+      await this.midiService.triggerReconnectAttempt().catch(() => undefined);
+    } else if (!this.midiService.isConnected()) {
+      if (this.autoConnectMidiOnInit) {
+        await this.midiService.connect().catch(() => undefined);
+      } else {
+        await this.midiService.discoverPorts().catch(() => undefined);
+      }
+    }
+    return {
+      lanUrls,
+      midiConnectionState: this.midiService.getState().connectionState,
+    };
   }
 
   public getDiscoveryService(): QuickToneDiscoveryService {
@@ -290,6 +393,7 @@ export class ControllerStateManager {
     const midiState = this.midiService.getState();
     return {
       connectionState: midiState.connectionState,
+      midiAdapterMode: midiState.midiAdapterMode,
       connectedPortName: midiState.connectedPortName,
       availablePorts: midiState.availablePorts,
       syncStatus: midiState.syncStatus,

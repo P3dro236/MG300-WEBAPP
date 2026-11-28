@@ -3,6 +3,7 @@ import {
   type ConfirmedDeviceState,
   type DeviceSyncStatus,
   MG300_USB_IDENTITY,
+  type MidiAdapterMode,
   type MidiConnectionState,
   type MidiErrorCode,
   type MidiPortInfo,
@@ -32,6 +33,7 @@ export class MidiServiceError extends Error {
 }
 
 export interface IMidiAdapter {
+  readonly isMock?: boolean;
   listPorts(): Promise<MidiPortInfo[]>;
   openPort(portName: string): Promise<{ portName: string }>;
   closePort(): Promise<void>;
@@ -56,6 +58,7 @@ export interface MidiServiceOptions {
 
 export interface MidiServiceStateSnapshot {
   connectionState: MidiConnectionState;
+  midiAdapterMode: MidiAdapterMode;
   connectedPortName: string | null;
   availablePorts: MidiPortInfo[];
   syncStatus: DeviceSyncStatus;

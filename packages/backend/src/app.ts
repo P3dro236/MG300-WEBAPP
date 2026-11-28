@@ -140,6 +140,7 @@ const DESKTOP_ONLY_PAIRING_ROUTES = new Set([
   '/api/pairing/reject',
   '/api/pairing/revoke',
   '/api/pairing/trusted/remove',
+  '/api/system/resume',
 ]);
 
 export interface BackendAppOptions extends ControllerStateManagerOptions {
@@ -739,12 +740,16 @@ export function createBackendApp(options: BackendAppOptions = {}): QuickToneBack
   });
 
   fastify.post('/api/pairing/challenge', async (request) => {
-    const lanUrls = stateManager.getState().lanUrls ?? [];
     const boundAddress = fastify.server.address();
-    const serverPort =
-      typeof boundAddress === 'object' && boundAddress !== null ? boundAddress.port : 3001;
+    const boundPort =
+      typeof boundAddress === 'object' && boundAddress !== null ? boundAddress.port : undefined;
+    const lanUrls =
+      options.lanUrls !== undefined
+        ? (stateManager.getState().lanUrls ?? [])
+        : stateManager.refreshLanUrls(boundPort);
 
-    let baseUrl = lanUrls[0] ?? `http://127.0.0.1:${serverPort}`;
+    const fallbackPort = boundPort ?? options.serverPort ?? 3001;
+    let baseUrl = lanUrls[0] ?? `http://127.0.0.1:${fallbackPort}`;
     // In Vite dev mode (staticDir absent), prefer the frontend dev server port (e.g. 5173)
     const originHeader = request.headers.origin;
     if (
@@ -952,6 +957,17 @@ export function createBackendApp(options: BackendAppOptions = {}): QuickToneBack
     const result = await stateManager.disconnectMidi();
     return {
       state: result.state,
+    };
+  });
+
+  fastify.post('/api/system/resume', async () => {
+    const boundAddress = fastify.server.address();
+    const serverPort =
+      typeof boundAddress === 'object' && boundAddress !== null ? boundAddress.port : undefined;
+    const summary = await stateManager.handleSystemResume(serverPort);
+    return {
+      ok: true,
+      ...summary,
     };
   });
 

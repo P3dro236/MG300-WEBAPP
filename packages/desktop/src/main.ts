@@ -1,5 +1,14 @@
 import path from 'node:path';
-import { BrowserWindow, app, dialog, ipcMain, safeStorage, session, shell } from 'electron';
+import {
+  BrowserWindow,
+  app,
+  dialog,
+  ipcMain,
+  powerMonitor,
+  safeStorage,
+  session,
+  shell,
+} from 'electron';
 import { LocalCoreSupervisor } from './core-supervisor.js';
 import { DpapiSessionStore } from './dpapi-store.js';
 import { createIpcHandlers, registerTypedIpcHandlers } from './ipc-router.js';
@@ -151,6 +160,8 @@ async function bootstrapDesktopApp(): Promise<void> {
     }
   });
 
+  let powerResumeRegistered = false;
+
   app.on('before-quit', (event) => {
     if (quitCleanupCompleted) {
       return;
@@ -160,6 +171,10 @@ async function bootstrapDesktopApp(): Promise<void> {
       return;
     }
     quitCleanupInFlight = true;
+    if (powerResumeRegistered) {
+      powerMonitor.removeListener('resume', onPowerResume);
+      powerResumeRegistered = false;
+    }
     unregisterIpc?.();
     unregisterIpc = null;
     void supervisor
@@ -182,7 +197,41 @@ async function bootstrapDesktopApp(): Promise<void> {
     });
   }
 
+  const onPowerResume = (): void => {
+    const activeBaseUrl = supervisor.getStatus().baseUrl;
+    if (!activeBaseUrl) {
+      return;
+    }
+    supervisor.logLine(
+      'info',
+      'Sistema retornou de suspensão; atualizando endereços LAN e descoberta MIDI.',
+    );
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5_000);
+    timer.unref();
+    const authToken = process.env.QUICKTONE_AUTH_TOKEN?.trim();
+    const headers: Record<string, string> = authToken ? { 'X-QuickTone-Token': authToken } : {};
+    void fetch(`${activeBaseUrl}/api/system/resume`, {
+      method: 'POST',
+      headers,
+      signal: controller.signal,
+    })
+      .catch((err) => {
+        supervisor.logLine(
+          'warn',
+          `Falha ao notificar /api/system/resume: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      })
+      .finally(() => {
+        clearTimeout(timer);
+      });
+  };
+
   await app.whenReady();
+  powerMonitor.on('resume', onPowerResume);
+  powerResumeRegistered = true;
 
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
     callback(false);

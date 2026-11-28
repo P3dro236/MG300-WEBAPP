@@ -1,12 +1,14 @@
 import React from 'react';
 import type {
   DeviceSyncStatus,
+  MidiAdapterMode,
   MidiConnectionState,
 } from '@quicktone/shared';
 import type { WsConnectionStatus } from '../api/client';
 
 interface ConnectionBadgeProps {
   connectionState: MidiConnectionState;
+  midiAdapterMode?: MidiAdapterMode;
   connectedPortName: string | null;
   wsStatus: WsConnectionStatus;
   syncStatus: DeviceSyncStatus;
@@ -57,6 +59,7 @@ const WS_ERROR_LABELS: Partial<Record<WsConnectionStatus, string>> = {
 
 export const ConnectionBadge: React.FC<ConnectionBadgeProps> = ({
   connectionState,
+  midiAdapterMode = 'hardware',
   connectedPortName,
   wsStatus,
   syncStatus,
@@ -65,7 +68,18 @@ export const ConnectionBadge: React.FC<ConnectionBadgeProps> = ({
   const effectiveMidiState: MidiConnectionState = !hasLoadedInitialState
     ? 'connecting'
     : connectionState;
-  const midiStyle = MIDI_STATE_MAP[effectiveMidiState];
+  const isMockConnected =
+    hasLoadedInitialState &&
+    midiAdapterMode === 'mock' &&
+    effectiveMidiState === 'connected';
+  const midiStyle = isMockConnected
+    ? {
+        label: 'Modo Simulação (MOCK) · Sem hardware USB',
+        dotClass: 'bg-status-warning',
+        textClass: 'text-status-warning',
+        badgeClass: 'border-status-warning-border bg-status-warning-bg',
+      }
+    : MIDI_STATE_MAP[effectiveMidiState];
   const wsWarningLabel = wsStatus !== 'connected' ? WS_ERROR_LABELS[wsStatus] : null;
 
   return (
@@ -78,6 +92,7 @@ export const ConnectionBadge: React.FC<ConnectionBadgeProps> = ({
       <div
         data-testid="midi-connection-badge"
         data-connection-state={effectiveMidiState}
+        data-midi-mode={midiAdapterMode}
         className={`inline-flex items-center gap-1.5 rounded border px-2.5 py-1 ${midiStyle.badgeClass}`}
       >
         <span className={`h-2 w-2 rounded-full ${midiStyle.dotClass}`} aria-hidden="true" />
@@ -87,7 +102,7 @@ export const ConnectionBadge: React.FC<ConnectionBadgeProps> = ({
             : wsStatus !== 'connected' && effectiveMidiState === 'disconnected'
               ? 'Sem servidor local'
               : midiStyle.label}
-          {effectiveMidiState === 'connected' && connectedPortName
+          {!isMockConnected && effectiveMidiState === 'connected' && connectedPortName
             ? ` · ${connectedPortName}`
             : ''}
         </span>
